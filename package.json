@@ -1,0 +1,30 @@
+{
+  "name": "linkedin-auto",
+  "version": "1.0.0",
+  "description": "Background AI agent for LinkedIn profile enhancement",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "scripts": {
+    "build": "tsc",
+    "agent:start": "tsx src/cli/index.ts start",
+    "agent:stop": "tsx src/cli/index.ts stop",
+    "agent:status": "tsx src/cli/index.ts status",
+    "stats": "tsx src/cli/index.ts stats",
+    "dry-run": "DRY_RUN=true tsx src/cli/index.ts start",
+    "dashboard": "tsx src/dashboard/server.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "openai": "^4.85.4",
+    "unipile-node-sdk": "^1.9.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Agent Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>LinkedIn Agent Dashboard</h1>
+      <p class="subtitle">Read-only view of agent activity</p>
+    </div>
+    <div class="header-meta">
+      <span id="last-updated">Loading…</span>
+      <span id="refresh-indicator" class="refresh-dot"></span>
+    </div>
+  </header>
+
+  <div id="halt-banner" class="halt-banner hidden">
+    <strong>Agent halted:</strong> <span id="halt-reason"></span>
+  </div>
+
+  <section class="cards" id="status-cards">
+    <div class="card">
+      <div class="card-label">Process</div>
+      <div class="card-value" id="process-status">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Agent Status</div>
+      <div class="card-value" id="agent-status">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Heartbeat</div>
+      <div class="card-value" id="last-heartbeat">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Action</div>
+      <div class="card-value card-value-sm" id="last-action">—</div>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Quota Usage</h2>
+      <div id="quotas" class="quotas"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Actions Today</h2>
+      <div id="actions-today" class="actions-today"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Follower Trend</h2>
+    <div class="chart-wrap">
+      <canvas id="follower-chart"></canvas>
+    </div>
+    <p id="no-followers" class="empty hidden">No follower data yet</p>
+  </section>
+
+  <div class="grid-2">
+    <section class="panel">
+      <h2>Targets Queue</h2>
+      <div id="target-counts" class="target-counts"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Type</th>
+              <th>Author</th>
+              <th>Preview</th>
+              <th>Discovered</th>
+            </tr>
+          </thead>
+          <tbody id="targets-body"></tbody>
+        </table>
+      </div>
+      <p id="no-targets" class="empty hidden">No pending targets</p>
+    </section>
+
+    <section class="panel">
+      <h2>Published Posts</h2>
+      <div id="posts-list" class="posts-list"></div>
+      <p id="no-posts" class="empty hidden">No posts yet</p>
+    </section>
+  </div>
+
+  <section class="panel" id="backoff-panel">
+    <h2>Active Backoffs</h2>
+    <div id="backoffs" class="backoffs"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent Actions</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Result</th>
+            <th>Target</th>
+            <th>Content</th>
+          </tr>
+        </thead>
+        <tbody id="actions-body"></tbody>
+      </table>
+    </div>
+    <p id="no-actions" class="empty hidden">No actions logged yet</p>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>
