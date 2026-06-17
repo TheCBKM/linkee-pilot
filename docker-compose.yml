@@ -1,0 +1,26 @@
+services:
+  agent:
+    build: .
+    container_name: linkedin-auto-agent
+    env_file: .env
+    volumes:
+      - linkedin-auto-data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: linkedin-auto-dashboard
+    command: ["node", "dist/dashboard/server.js"]
+    env_file: .env
+    environment:
+      DASHBOARD_HOST: 0.0.0.0
+    ports:
+      - "${DASHBOARD_PORT:-3847}:3847"
+    volumes:
+      - linkedin-auto-data:/app/data
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+volumes:
+  linkedin-auto-data:

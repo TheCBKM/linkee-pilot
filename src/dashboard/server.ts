@@ -23,6 +23,10 @@ function getPort(): number {
   return isNaN(port) ? 3847 : port;
 }
 
+function getHost(): string {
+  return process.env.DASHBOARD_HOST ?? "127.0.0.1";
+}
+
 function serveStatic(urlPath: string, res: http.ServerResponse): void {
   const safePath = urlPath === "/" ? "/index.html" : urlPath;
   const filePath = path.join(PUBLIC_DIR, path.normalize(safePath));
@@ -48,7 +52,7 @@ function serveStatic(urlPath: string, res: http.ServerResponse): void {
 loadEnv({ requireApiKeys: false });
 
 const port = getPort();
-const host = "127.0.0.1";
+const host = getHost();
 
 const server = http.createServer((req, res) => {
   const url = req.url ?? "/";
