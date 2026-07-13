@@ -1,11 +1,17 @@
 import { sendInvitation } from "../clients/unipile.js";
 import { executeWithRateLimit } from "../rate-limiter/index.js";
-import { updateTargetStatus } from "../db/store.js";
+import {
+  getResolvedProviderId,
+  markPersonInvited,
+} from "../db/store.js";
 import { draftInviteNote } from "../ai/comment-writer.js";
 import type { Target } from "../db/store.js";
 
 export async function sendConnectionRequest(target: Target): Promise<boolean> {
-  const providerId = target.provider_id ?? target.target_id;
+  const providerId =
+    getResolvedProviderId(target) ??
+    target.provider_id ??
+    target.target_id.replace(/^person:/, "");
 
   const message = await draftInviteNote({
     name: target.author_name ?? undefined,
@@ -24,7 +30,7 @@ export async function sendConnectionRequest(target: Target): Promise<boolean> {
   });
 
   if (result.success) {
-    updateTargetStatus(target.target_id, "invited");
+    markPersonInvited(target.target_id);
   }
   return result.success;
 }

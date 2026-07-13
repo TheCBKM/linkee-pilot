@@ -55,13 +55,45 @@ export function readPidFile(): number | null {
   }
 }
 
-export function isProcessRunning(pid: number): boolean {
+function readProcessCmdline(pid: number): string | null {
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8").replace(/\0/g, " ");
+  } catch {
+    return null;
+  }
+}
+
+function isAgentCmdline(cmdline: string): boolean {
+  return (
+    cmdline.includes("dist/cli/index.js") ||
+    cmdline.includes("cli/index.ts")
+  );
+}
+
+/** True if another agent process is running (not a stale Docker PID-1 lock file). */
+export function isAgentRunning(pid: number): boolean {
+  // Stale lock from a previous container: Docker always runs the main process as PID 1.
+  if (pid === process.pid) {
+    return false;
+  }
+
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+
+  const cmdline = readProcessCmdline(pid);
+  if (cmdline === null) {
+    return true;
+  }
+
+  return isAgentCmdline(cmdline);
+}
+
+/** @deprecated Prefer isAgentRunning for agent singleton checks. */
+export function isProcessRunning(pid: number): boolean {
+  return isAgentRunning(pid);
 }
 
 export function writeHeartbeat(lastAction?: string): void {

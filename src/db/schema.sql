@@ -24,8 +24,14 @@ CREATE TABLE IF NOT EXISTS targets (
   author_headline TEXT,
   content_preview TEXT,
   relevance_score INTEGER DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending', -- pending | engaged | skipped | invited
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | engaged | skipped | invited | filtered
   metadata TEXT, -- JSON
+  sequence_stage TEXT DEFAULT 'discovered',
+  author_provider_id TEXT,
+  author_public_id TEXT,
+  source_post_id TEXT,
+  person_source TEXT, -- post | search
+  posted_at TEXT,
   discovered_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_engaged_at TEXT
 );
@@ -38,6 +44,8 @@ CREATE TABLE IF NOT EXISTS posts (
   post_id TEXT,
   content TEXT NOT NULL,
   pillar TEXT,
+  format TEXT NOT NULL DEFAULT 'text', -- text | repost
+  source_post_id TEXT,
   published_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

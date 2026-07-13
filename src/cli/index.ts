@@ -11,7 +11,7 @@ import {
 } from "../db/store.js";
 import {
   readPidFile,
-  isProcessRunning,
+  isAgentRunning,
   removePidFile,
 } from "../agent/lifecycle.js";
 import { startDaemon } from "../agent/daemon.js";
@@ -31,9 +31,12 @@ program
   .option("-d, --daemon", "Run detached in background")
   .action(async (opts: { foreground?: boolean; daemon?: boolean }) => {
     const existingPid = readPidFile();
-    if (existingPid && isProcessRunning(existingPid)) {
-      console.log(`Agent already running (PID ${existingPid})`);
-      process.exit(1);
+    if (existingPid) {
+      if (isAgentRunning(existingPid)) {
+        console.log(`Agent already running (PID ${existingPid})`);
+        process.exit(1);
+      }
+      removePidFile();
     }
 
     if (opts.daemon) {
@@ -56,7 +59,7 @@ program
   .description("Gracefully stop the background agent")
   .action(() => {
     const pid = readPidFile();
-    if (!pid || !isProcessRunning(pid)) {
+    if (!pid || !isAgentRunning(pid)) {
       console.log("Agent is not running");
       removePidFile();
       return;
@@ -70,7 +73,7 @@ program
   .description("Show agent state and quota usage")
   .action(() => {
     const pid = readPidFile();
-    const running = pid ? isProcessRunning(pid) : false;
+    const running = pid ? isAgentRunning(pid) : false;
     const stats = getStatsSummary();
     const quotas = getQuotaRemaining();
 

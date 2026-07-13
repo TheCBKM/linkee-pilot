@@ -11,7 +11,7 @@
   <header class="header">
     <div>
       <h1>LinkedIn Agent Dashboard</h1>
-      <p class="subtitle">Read-only view of agent activity</p>
+      <p class="subtitle">Read-only view of agent activity & outreach pipeline</p>
     </div>
     <div class="header-meta">
       <span id="last-updated">Loading…</span>
@@ -40,6 +40,91 @@
       <div class="card-label">Last Action</div>
       <div class="card-value card-value-sm" id="last-action">—</div>
     </div>
+  </section>
+
+  <section class="cards outreach-cards" id="outreach-cards">
+    <div class="card card-highlight">
+      <div class="card-label">Ready to Invite</div>
+      <div class="card-value" id="stat-invite-ready">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Invited (total)</div>
+      <div class="card-value" id="stat-invited">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">People in Pipeline</div>
+      <div class="card-value" id="stat-people">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Post Targets</div>
+      <div class="card-value" id="stat-posts">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Reposts Published</div>
+      <div class="card-value" id="stat-reposts">—</div>
+    </div>
+  </section>
+
+  <section class="cards" id="post-health-cards">
+    <div class="card">
+      <div class="card-label">Posts This Week</div>
+      <div class="card-value" id="ph-posts-week">—</div>
+      <div class="card-sub" id="ph-expected">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Originals / Reposts</div>
+      <div class="card-value" id="ph-format-split">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Publish</div>
+      <div class="card-value card-value-sm" id="ph-last-publish">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Post Boost</div>
+      <div class="card-value card-value-sm" id="ph-boost">—</div>
+    </div>
+  </section>
+
+  <section class="cards" id="icp-quality-cards">
+    <div class="card">
+      <div class="card-label">ICP Hit Rate (7d)</div>
+      <div class="card-value" id="icp-hit-rate">—</div>
+      <div class="card-sub" id="icp-pass-filter">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Outreach Avg Score</div>
+      <div class="card-value" id="icp-avg-score">—</div>
+      <div class="card-sub" id="icp-sample">comments + invites</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Outreach ≥70</div>
+      <div class="card-value" id="icp-pct-70">—</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Outreach Pipeline</h2>
+    <p class="panel-desc">Warm sequence: engage on posts → profile view → connection request</p>
+    <div id="pipeline-funnel" class="pipeline-funnel"></div>
+  </section>
+
+  <section class="panel" id="invite-ready-panel">
+    <h2>Ready to Invite</h2>
+    <p class="panel-desc">People who completed the warm-up sequence</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Score</th>
+            <th>Name</th>
+            <th>Headline</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody id="invite-ready-body"></tbody>
+      </table>
+    </div>
+    <p id="no-invite-ready" class="empty hidden">No one ready for invite yet — keep engaging</p>
   </section>
 
   <div class="grid-2">
@@ -72,6 +157,7 @@
             <tr>
               <th>Score</th>
               <th>Type</th>
+              <th>Stage</th>
               <th>Author</th>
               <th>Preview</th>
               <th>Discovered</th>

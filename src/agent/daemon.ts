@@ -18,8 +18,10 @@ import { likePost } from "../actions/like-post.js";
 import { likeComment } from "../actions/like-comment.js";
 import { commentOnPost } from "../actions/comment-post.js";
 import { sendConnectionRequest } from "../actions/send-invite.js";
+import { viewProfile } from "../actions/view-profile.js";
 import { publishPost } from "../actions/create-post.js";
 import { fetchAndRecordProfile } from "../actions/fetch-profile.js";
+import { gatherPostTrends } from "../ai/post-trends.js";
 
 const IDLE_SLEEP_MS = 60_000;
 const MIN_SLEEP_MS = 5_000;
@@ -70,8 +72,13 @@ export async function startDaemon(): Promise<void> {
 
     const actionPromise = executeAction(scheduled);
     setCurrentAction(actionPromise);
-    await actionPromise;
-    setCurrentAction(Promise.resolve());
+    try {
+      await actionPromise;
+    } catch (err) {
+      console.error(`[agent] Action "${scheduled.type}" failed:`, err);
+    } finally {
+      setCurrentAction(Promise.resolve());
+    }
   }
 }
 
@@ -110,9 +117,19 @@ async function executeAction(
       writeHeartbeat("send_invite");
       break;
     }
+    case "view_profile": {
+      console.log(`[agent] Viewing profile of ${action.target.author_name ?? "unknown"}`);
+      await viewProfile(action.target);
+      writeHeartbeat("view_profile");
+      break;
+    }
     case "create_post": {
       console.log("[agent] Publishing original post...");
-      await publishPost();
+      const trends = await gatherPostTrends();
+      if (trends) {
+        console.log("[agent] Using research trends for draft");
+      }
+      await publishPost(trends);
       writeHeartbeat("create_post");
       break;
     }

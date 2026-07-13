@@ -16,11 +16,19 @@ export function getAccountId(): string {
 }
 
 export interface LinkedInSearchParams {
-  keywords: string;
+  keywords?: string;
   category: "posts" | "people";
   limit?: number;
   cursor?: string;
   api?: "classic" | "sales_navigator" | "recruiter";
+  sort_by?: string;
+  date_posted?: string;
+  network_distance?: number[];
+  profile_language?: string[];
+  /** Classic people/company search: LinkedIn location geo IDs. */
+  location?: string[];
+  /** Classic posts search: single global location geo ID. */
+  region?: string;
 }
 
 export async function linkedinSearch(params: LinkedInSearchParams) {
@@ -28,7 +36,20 @@ export async function linkedinSearch(params: LinkedInSearchParams) {
   const url = new URL(`${env.UNIPILE_BASE_URL}/api/v1/linkedin/search`);
   url.searchParams.set("account_id", env.UNIPILE_ACCOUNT_ID);
   if (params.cursor) url.searchParams.set("cursor", params.cursor);
-  url.searchParams.set("limit", String(params.limit ?? 10));
+  url.searchParams.set("limit", String(params.limit ?? 25));
+
+  const body: Record<string, unknown> = {
+    api: params.api ?? "classic",
+    category: params.category,
+  };
+
+  if (params.keywords) body.keywords = params.keywords;
+  if (params.sort_by) body.sort_by = params.sort_by;
+  if (params.date_posted) body.date_posted = params.date_posted;
+  if (params.network_distance) body.network_distance = params.network_distance;
+  if (params.profile_language) body.profile_language = params.profile_language;
+  if (params.location?.length) body.location = params.location;
+  if (params.region) body.region = params.region;
 
   const response = await fetch(url.toString(), {
     method: "POST",
@@ -37,19 +58,29 @@ export async function linkedinSearch(params: LinkedInSearchParams) {
       "Content-Type": "application/json",
       Accept: "application/json",
     },
-    body: JSON.stringify({
-      api: params.api ?? "classic",
-      category: params.category,
-      keywords: params.keywords,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new UnipileError(response.status, body);
+    const text = await response.text();
+    throw new UnipileError(response.status, text);
   }
 
   return response.json();
+}
+
+export async function getUserProfile(
+  identifier: string,
+  options?: { notify?: boolean }
+) {
+  const env = getEnv();
+  const sdk = getUnipileClient();
+  return sdk.users.getProfile({
+    account_id: env.UNIPILE_ACCOUNT_ID,
+    identifier,
+    linkedin_sections: "*",
+    ...(options?.notify && { notify: true }),
+  });
 }
 
 export async function getOwnProfile() {
@@ -154,11 +185,12 @@ export async function sendInvitation(params: {
   return response.json();
 }
 
-export async function createPost(text: string) {
+export async function createPost(params: { text: string; repost?: string }) {
   const env = getEnv();
   const formData = new FormData();
   formData.append("account_id", env.UNIPILE_ACCOUNT_ID);
-  formData.append("text", text);
+  formData.append("text", params.text);
+  if (params.repost) formData.append("repost", params.repost);
 
   const response = await fetch(`${env.UNIPILE_BASE_URL}/api/v1/posts`, {
     method: "POST",

@@ -5,7 +5,8 @@ export type ActionType =
   | "send_invite"
   | "create_post"
   | "search"
-  | "profile_audit";
+  | "profile_audit"
+  | "view_profile";
 
 export const LIMITS = {
   rampUpDays: 14,
@@ -17,11 +18,12 @@ export const LIMITS = {
     comment_post: { rampUp: 5, steady: 15 },
     send_invite: { rampUp: 10, steady: 25 },
     create_post: { rampUp: 0, steady: 0 }, // weekly, handled separately
-    search: { rampUp: 20, steady: 50 },
+    search: { rampUp: 40, steady: 80 },
     profile_audit: { rampUp: 1, steady: 1 },
+    view_profile: { rampUp: 8, steady: 20 },
   } as Record<ActionType, { rampUp: number; steady: number }>,
 
-  weeklyPostDays: [2, 4, 6] as const, // Tue, Thu, Sat (0=Sun)
+  weeklyPostDays: [2, 4, 5] as const, // Tue, Thu, Fri (0=Sun)
 
   timing: {
     minDelayMs: 45_000,
@@ -40,7 +42,15 @@ export const LIMITS = {
   },
 
   dedupWindowDays: 30,
-  minRelevanceScore: 70,
+  /** Minimum AI relevance to keep a discovery at all. */
+  minRelevanceScore: 75,
+  /** Likes/comments only on targets at or above this score. */
+  minEngagementRelevanceScore: 80,
+  /**
+   * Prefer posts that already have traction. Very fresh posts (<6h) may
+   * skip this; older posts need at least this many reactions.
+   */
+  minPostReactions: 5,
 
   contentMaxLength: {
     comment: 250,

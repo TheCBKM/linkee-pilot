@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "../config/env.js";
+import { ensureDbSchema } from "../db/migrate.js";
 import { getDashboardOverview } from "./queries.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +51,7 @@ function serveStatic(urlPath: string, res: http.ServerResponse): void {
 }
 
 loadEnv({ requireApiKeys: false });
+ensureDbSchema();
 
 const port = getPort();
 const host = getHost();

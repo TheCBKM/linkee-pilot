@@ -1,5 +1,6 @@
 import { chatCompletion, systemPromptWithBrand } from "../clients/openai.js";
 import { LIMITS } from "../config/limits.js";
+import { humanizeContent } from "./humanize.js";
 import { safetyFilter } from "./safety-filter.js";
 
 export async function draftComment(params: {
@@ -12,7 +13,15 @@ export async function draftComment(params: {
 - Add genuine insight or a thoughtful question
 - Reference a specific point from the post
 - No links, no self-promotion, no "DM me", no generic praise
-- Match the builder/innovator voice`
+- Match the builder/innovator voice
+- Sound human, not AI-generated:
+  - Write like you typed this between meetings: casual, direct, a little imperfect
+  - Vary sentence length; one short sentence is fine
+  - Use contractions naturally (it's, we're, don't) when they fit
+  - No buzzwords (leverage, delve, landscape, game-changer, robust, synergy)
+  - No formulaic openers ("Great point!", "This resonates", "Couldn't agree more")
+  - NEVER use em dashes (—), en dashes (–), or semicolons. Use commas, periods, or hyphens.
+  - Skip polished essay tone; sound like a real person reacting to the post`
   );
 
   const user = `Post by ${params.authorName ?? "someone"}:
@@ -23,11 +32,11 @@ Write one comment only. No quotes around it.`;
   let text = await chatCompletion({
     system,
     user,
-    temperature: 0.8,
+    temperature: 0.9,
     maxTokens: 150,
   });
 
-  text = text.replace(/^["']|["']$/g, "").trim();
+  text = humanizeContent(text.replace(/^["']|["']$/g, ""));
 
   if (text.length > LIMITS.contentMaxLength.comment) {
     text = text.slice(0, LIMITS.contentMaxLength.comment - 3) + "...";
@@ -49,9 +58,10 @@ export async function draftInviteNote(params: {
   const system = systemPromptWithBrand(
     `Write a LinkedIn connection request note. Rules:
 - Max ${LIMITS.contentMaxLength.invite} characters
-- Personalized, mention shared interest in recruiting/workforce tech
+- Personalized, mention shared interest in engineering productivity, agile workflows, or AI for dev teams
 - No links, no sales pitch, no "let's connect" clichés
-- Warm but professional`
+- Warm but professional
+- NEVER use em dashes (—) or en dashes (–). Use commas or hyphens.`
   );
 
   const user = `Connecting with: ${params.name ?? "professional"}
@@ -66,7 +76,7 @@ Write the note only. No quotes.`;
     maxTokens: 120,
   });
 
-  text = text.replace(/^["']|["']$/g, "").trim();
+  text = humanizeContent(text.replace(/^["']|["']$/g, ""));
 
   if (text.length > LIMITS.contentMaxLength.invite) {
     text = text.slice(0, LIMITS.contentMaxLength.invite - 3) + "...";

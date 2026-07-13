@@ -51,6 +51,16 @@ export async function executeWithRateLimit<T>(params: {
       result: "success",
     });
     recordAction(params.actionType);
+
+    burstCount++;
+    if (burstCount >= burstLimit) {
+      resetBurst();
+      await sleep(burstPauseMs());
+    } else {
+      await humanDelay();
+    }
+
+    return { success: true, result };
   } catch (err) {
     const backoff = handleApiError(err, params.actionType);
     logAction({
@@ -75,16 +85,6 @@ export async function executeWithRateLimit<T>(params: {
 
     return { success: false, skipped: true };
   }
-
-  burstCount++;
-  if (burstCount >= burstLimit) {
-    resetBurst();
-    await sleep(burstPauseMs());
-  } else {
-    await humanDelay();
-  }
-
-  return { success: true };
 }
 
 function parseErrorType(err: unknown): string | null {
