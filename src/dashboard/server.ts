@@ -28,8 +28,14 @@ function getHost(): string {
   return process.env.DASHBOARD_HOST ?? "127.0.0.1";
 }
 
+function resolvePublicPath(urlPath: string): string {
+  if (urlPath === "/" || urlPath === "") return "/index.html";
+  if (urlPath === "/docs" || urlPath === "/docs/") return "/docs.html";
+  return urlPath;
+}
+
 function serveStatic(urlPath: string, res: http.ServerResponse): void {
-  const safePath = urlPath === "/" ? "/index.html" : urlPath;
+  const safePath = resolvePublicPath(urlPath);
   const filePath = path.join(PUBLIC_DIR, path.normalize(safePath));
 
   if (!filePath.startsWith(PUBLIC_DIR)) {

@@ -321,3 +321,41 @@ export function canSharePost(metadata: string | null): boolean {
     return true;
   }
 }
+
+/**
+ * Unipile needs the LinkedIn social_id URN for reliable post actions
+ * (repost / comment / react). Search targets often store a stripped
+ * numeric id — recover the URN from metadata when present.
+ */
+export function resolvePostSocialId(target: {
+  social_id?: string | null;
+  target_id?: string;
+  metadata?: string | null;
+}): string | null {
+  if (target.metadata) {
+    try {
+      const parsed = JSON.parse(target.metadata) as {
+        social_id?: unknown;
+        id?: unknown;
+      };
+      const fromMeta = normalizeLinkedInPostId(parsed.social_id ?? parsed.id);
+      if (fromMeta) return fromMeta;
+    } catch {
+      // fall through to stored fields
+    }
+  }
+
+  return normalizeLinkedInPostId(target.social_id ?? target.target_id);
+}
+
+function normalizeLinkedInPostId(value: unknown): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (raw.startsWith("urn:li:")) return raw;
+  // Bare activity / share numeric ids — default to activity URN.
+  if (/^\d{10,}$/.test(raw)) return `urn:li:activity:${raw}`;
+  // activity:123 / ugcPost:123 / share:123
+  if (/^(activity|ugcPost|share):\d+$/.test(raw)) return `urn:li:${raw}`;
+  return raw;
+}

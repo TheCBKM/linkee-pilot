@@ -75,6 +75,8 @@ npm run dashboard
 
 The dashboard is **read-only** — it opens SQLite in readonly mode and does not affect the agent. Port is configurable via `DASHBOARD_PORT` (default `3847`).
 
+Architecture docs (pipelines, schedule windows, rate limits, data model) are at **http://127.0.0.1:3847/docs**.
+
 ## Outreach sequence
 
 People discovered from posts follow a warm path before any connection request:

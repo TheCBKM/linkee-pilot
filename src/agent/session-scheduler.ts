@@ -1,7 +1,6 @@
 import type { ActionType } from "../config/limits.js";
 import { isPostDay, isProfileAuditDay } from "../config/limits.js";
 import {
-  getAgentState,
   getFreshPostTargetForEngagement,
   getPersonForInvite,
   getPersonForProfileView,
@@ -44,8 +43,7 @@ export function getNextScheduledAction(): ScheduledAction {
     return { type: "create_post" };
   }
 
-  const boostActive = isPostBoostActive();
-  const { candidates, weights } = buildEligibleCandidates(window, boostActive);
+  const { candidates, weights } = buildEligibleCandidates(window);
 
   if (candidates.length === 0) {
     if (canAct("search").allowed) {
@@ -54,7 +52,7 @@ export function getNextScheduledAction(): ScheduledAction {
     return { type: "idle", reason: "all_quotas_exhausted" };
   }
 
-  if (Math.random() < BROWSE_PAUSE_CHANCE && !boostActive) {
+  if (Math.random() < BROWSE_PAUSE_CHANCE) {
     return { type: "sleep", reason: "browse_pause", ms: humanDelayMs() };
   }
 
@@ -62,20 +60,13 @@ export function getNextScheduledAction(): ScheduledAction {
   return picked ?? { type: "idle", reason: "all_quotas_exhausted" };
 }
 
-export function isPostBoostActive(): boolean {
-  const until = getAgentState(POST_BOOST_UNTIL_KEY);
-  if (!until) return false;
-  return Date.now() < new Date(until).getTime();
-}
-
 function buildEligibleCandidates(
-  window: ReturnType<typeof getTimeWindow>,
-  boostActive: boolean
+  window: ReturnType<typeof getTimeWindow>
 ): { candidates: ScheduledAction[]; weights: number[] } {
   const candidates: ScheduledAction[] = [];
   const weights: number[] = [];
 
-  for (const { actionType, weight } of getWeightsForWindow(window, boostActive)) {
+  for (const { actionType, weight } of getWeightsForWindow(window)) {
     if (!canAct(actionType).allowed) continue;
 
     if (actionType === "search") {
@@ -122,20 +113,8 @@ function toTargetAction(actionType: ActionType): ScheduledAction | null {
 }
 
 function getWeightsForWindow(
-  window: ReturnType<typeof getTimeWindow>,
-  boostActive: boolean
+  window: ReturnType<typeof getTimeWindow>
 ): WindowWeight[] {
-  if (boostActive) {
-    // Warm the network after publishing — like/comment ICP posts, soft views; skip invites
-    return [
-      { actionType: "like_post", weight: 5 },
-      { actionType: "comment_post", weight: 5 },
-      { actionType: "view_profile", weight: 2 },
-      { actionType: "like_comment", weight: 1 },
-      { actionType: "search", weight: 1 },
-    ];
-  }
-
   switch (window) {
     case "morning":
       return [

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture Docs — LinkedIn Agent</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/docs.css">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body class="docs-page">
+  <nav class="docs-nav">
+    <a href="/" class="docs-nav-brand">LinkedIn Agent</a>
+    <div class="docs-nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/docs" class="active">Docs</a>
+    </div>
+  </nav>
+
+  <aside class="docs-toc">
+    <p class="toc-title">Contents</p>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#daemon">Daemon loop</a></li>
+      <li><a href="#schedule">Schedule &amp; windows</a></li>
+      <li><a href="#pipelines">Pipelines</a></li>
+      <li><a href="#actions">Actions</a></li>
+      <li><a href="#ai">AI layer</a></li>
+      <li><a href="#rate-limits">Rate limits</a></li>
+      <li><a href="#data">Data model</a></li>
+      <li><a href="#clients">Clients &amp; CLI</a></li>
+    </ol>
+  </aside>
+
+  <main class="docs-main">
+    <header class="docs-hero">
+      <p class="docs-eyebrow">Technical reference</p>
+      <h1>How the agent works</h1>
+      <p class="docs-lead">
+        A continuous LinkedIn daemon — not cron jobs. One action at a time,
+        human-like delays, warm outreach sequences, and a full SQLite audit trail.
+      </p>
+    </header>
+
+    <!-- OVERVIEW -->
+    <section id="overview" class="docs-section">
+      <h2>Overview</h2>
+      <p>
+        The agent researches ICP-aligned people and posts via Unipile, engages
+        (like / comment / view), sends connection invites only after a warm-up
+        sequence, and publishes thought-leadership posts on Tue / Thu / Fri.
+        Every mutating call goes through a rate limiter with daily quotas,
+        burst pauses, and backoff.
+      </p>
+
+      <div class="callout">
+        <strong>No OS crons.</strong>
+        Scheduling is an in-process loop that sleeps until the next opportunity.
+        Working hours (Mon–Fri 08:00–19:00 local) gate all LinkedIn actions.
+      </div>
+
+      <div class="layer-grid">
+        <div class="layer-card">
+          <span class="layer-num">01</span>
+          <h3>CLI / Daemon</h3>
+          <p>Process control, heartbeat, graceful shutdown</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">02</span>
+          <h3>Scheduler</h3>
+          <p>Time windows, weighted picks, priorities</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">03</span>
+          <h3>Actions</h3>
+          <p>Like, comment, view, invite, post, research</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">04</span>
+          <h3>AI</h3>
+          <p>ICP filter, scoring, drafts, safety</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">05</span>
+          <h3>Rate limiter</h3>
+          <p>Quotas, delays, burst, backoff</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">06</span>
+          <h3>SQLite + Dashboard</h3>
+          <p>Audit trail and read-only UI</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ARCHITECTURE -->
+    <section id="architecture" class="docs-section">
+      <h2>Architecture</h2>
+      <p>
+        The daemon owns the write path. The dashboard opens SQLite in readonly
+        mode and never controls the agent.
+      </p>
+
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TB
+  CLI["CLI<br/><code>src/cli</code>"] --> Daemon["Daemon<br/><code>agent/daemon.ts</code>"]
+  Daemon --> Lifecycle["Lifecycle<br/>PID · SIGTERM · heartbeat"]
+  Daemon --> Scheduler["Session scheduler"]
+  Scheduler --> Quota["Rate limiter / quotas"]
+  Scheduler --> Store[("SQLite<br/>db/store.ts")]
+  Daemon --> Actions["Actions<br/>like · comment · view · invite · post"]
+  Actions --> RL["executeWithRateLimit"]
+  Actions --> AI["AI modules"]
+  Actions --> Unipile["Unipile client"]
+  AI --> OpenAI["OpenAI client"]
+  AI --> Store
+  RL --> Store
+  Dashboard["Dashboard<br/>:3847"] -->|readonly| Store
+        </pre>
+      </div>
+
+      <h3>Key directories</h3>
+      <div class="code-grid">
+        <code>src/agent/</code>
+        <span>Daemon loop, lifecycle, session scheduler</span>
+        <code>src/actions/</code>
+        <span>One LinkedIn verb per module</span>
+        <code>src/ai/</code>
+        <span>Research, scoring, writers, safety</span>
+        <code>src/rate-limiter/</code>
+        <span>Quotas, schedule windows, human delays</span>
+        <code>src/config/</code>
+        <span>Brand, ICP, limits, sequence rules</span>
+        <code>src/db/</code>
+        <span>Schema, migrations, store helpers</span>
+        <code>src/clients/</code>
+        <span>Unipile + OpenAI</span>
+        <code>src/dashboard/</code>
+        <span>HTTP UI + this docs page</span>
+      </div>
+    </section>
+
+    <!-- DAEMON -->
+    <section id="daemon" class="docs-section">
+      <h2>Daemon loop</h2>
+      <p>
+        On start: load env, write PID, reset burst counter, snapshot own profile.
+        Then loop forever until halted or SIGTERM.
+      </p>
+
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+  Start([startDaemon]) --> Profile[fetchAndRecordProfile]
+  Profile --> Loop{shutting down?}
+  Loop -->|yes| Exit([exit])
+  Loop -->|no| HB[writeHeartbeat]
+  HB --> Halt{halted?}
+  Halt -->|yes| Exit
+  Halt -->|no| Pause{PAUSED?}
+  Pause -->|yes| S60[sleep 60s]
+  S60 --> Loop
+  Pause -->|no| Hours{working hours?}
+  Hours -->|no| SleepOff[sleep until next window]
+  SleepOff --> Loop
+  Hours -->|yes| Next[getNextScheduledAction]
+  Next --> Idle{type = idle?}
+  Idle -->|yes| S60
+  Idle -->|no| Exec[executeAction]
+  Exec --> Delay[human delay / burst via rate limiter]
+  Delay --> Loop
+        </pre>
+      </div>
+
+      <ul class="docs-list">
+        <li><strong>Idle sleep</strong> — 60s when paused, no work, or quotas exhausted</li>
+        <li><strong>Off-hours sleep</strong> — until next weekday morning (or 1h recheck on weekends)</li>
+        <li><strong>Graceful stop</strong> — SIGTERM/SIGINT waits for the in-flight action, then clears PID</li>
+        <li><strong>Halt</strong> — account restricted / disconnected stops the loop permanently until cleared</li>
+      </ul>
+    </section>
+
+    <!-- SCHEDULE -->
+    <section id="schedule" class="docs-section">
+      <h2>Schedule &amp; windows</h2>
+      <p>
+        There are no cron expressions. Behavior is driven by calendar day,
+        local hour, and quota state. The scheduler evaluates priorities in order:
+      </p>
+
+      <ol class="priority-list">
+        <li><span class="prio">1</span> Off hours → idle</li>
+        <li><span class="prio">2</span> Monday + quota → <code>profile_audit</code></li>
+        <li><span class="prio">3</span> Tue / Thu / Fri + quota → <code>create_post</code> (beats engagement)</li>
+        <li><span class="prio">4</span> Weighted candidates for current time window (or post-boost weights)</li>
+        <li><span class="prio">5</span> No candidates → <code>research</code> if search allowed, else idle</li>
+        <li><span class="prio">6</span> 8% browse pause (extra human delay) unless post-boost is active</li>
+      </ol>
+
+      <h3>Weekly rhythm</h3>
+      <div class="week-grid" aria-hidden="false">
+        <div class="week-day off"><span>Sun</span><em>off</em></div>
+        <div class="week-day audit"><span>Mon</span><em>profile audit</em></div>
+        <div class="week-day post"><span>Tue</span><em>post day</em></div>
+        <div class="week-day engage"><span>Wed</span><em>engage</em></div>
+        <div class="week-day post"><span>Thu</span><em>post day</em></div>
+        <div class="week-day post"><span>Fri</span><em>post day</em></div>
+        <div class="week-day off"><span>Sat</span><em>off</em></div>
+      </div>
+
+      <h3>Daily time windows</h3>
+      <p>Working hours are 08:00–19:00 local (<code>TIMEZONE</code>, default America/Los_Angeles).</p>
+
+      <div class="day-timeline" aria-label="Daily action mix by hour">
+        <div class="day-slot morning" style="--span: 3">
+          <strong>8–10</strong>
+          <span>Morning</span>
+          <em>search · like · comment</em>
+        </div>
+        <div class="day-slot midday" style="--span: 3">
+          <strong>11–13</strong>
+          <span>Midday</span>
+          <em>comment · like_c · like</em>
+        </div>
+        <div class="day-slot afternoon" style="--span: 3">
+          <strong>14–16</strong>
+          <span>Afternoon</span>
+          <em>view · invite · like · search</em>
+        </div>
+        <div class="day-slot late" style="--span: 2">
+          <strong>17–18</strong>
+          <span>Late</span>
+          <em>like · comment · view</em>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Window</th>
+              <th>Hours</th>
+              <th>Weights</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>morning</td>
+              <td>8–10</td>
+              <td>search:3 · like:2 · comment:2</td>
+            </tr>
+            <tr>
+              <td>midday</td>
+              <td>11–13</td>
+              <td>comment:3 · like_comment:2 · like:2</td>
+            </tr>
+            <tr>
+              <td>afternoon</td>
+              <td>14–16</td>
+              <td>view:3 · invite:3 · like:2 · search:2</td>
+            </tr>
+            <tr>
+              <td>late_afternoon</td>
+              <td>17–18</td>
+              <td>like:2 · comment:2 · view:2 · like_comment:2</td>
+            </tr>
+            <tr>
+              <td>post_boost</td>
+              <td>+45 min after publish</td>
+              <td>like:5 · comment:5 · view:2 · like_comment:1 · search:1 · <em>no invites</em></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>“Cron-like” triggers (in-process)</h3>
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr><th>Trigger</th><th>When</th><th>What</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Daemon loop</td><td>Continuous</td><td>Pick one action, run, delay</td></tr>
+            <tr><td>Working hours</td><td>Mon–Fri 08–19</td><td>Gate for all actions</td></tr>
+            <tr><td>Post days</td><td>Tue / Thu / Fri</td><td>At most 1 <code>create_post</code> / day</td></tr>
+            <tr><td>Profile audit</td><td>Monday</td><td>At most 1 <code>profile_audit</code> / day</td></tr>
+            <tr><td>Post boost</td><td>45 min after publish</td><td>Engagement-biased weights, no invites</td></tr>
+            <tr><td>Human delay</td><td>After each action</td><td>Gaussian 45–240s (mean 90s)</td></tr>
+            <tr><td>Burst pause</td><td>After 3–7 actions</td><td>Random 10–25 min idle</td></tr>
+            <tr><td>Browse pause</td><td>8% chance</td><td>Extra human delay as <code>sleep</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- PIPELINES -->
+    <section id="pipelines" class="docs-section">
+      <h2>Pipelines</h2>
+
+      <h3>Warm outreach sequence</h3>
+      <p>
+        Invites are never sent cold. Stage transitions are side effects of
+        engagement actions. Only people at <code>invite_ready</code> are selected for invites.
+      </p>
+
+      <div class="seq-track">
+        <div class="seq-step">discovered</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step">liked</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step">commented</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step">viewed</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step ready">invite_ready</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step done">invited</div>
+      </div>
+
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart LR
+  R[research] --> P[person discovered]
+  P -->|source = post| L[like author post]
+  L --> C[comment on post]
+  C --> V[view profile]
+  V --> IR[invite_ready]
+  P -->|source = search| V2[view profile]
+  V2 --> IR
+  IR --> I[send_invite]
+  I --> Inv[invited]
+        </pre>
+      </div>
+
+      <div class="callout callout-info">
+        <strong>Invite readiness rules</strong>
+        <ul>
+          <li><strong>Post-sourced:</strong> must have commented <em>and</em> viewed</li>
+          <li><strong>Search-sourced:</strong> must have viewed (no cold invite without a view)</li>
+        </ul>
+      </div>
+
+      <h3>Engagement pipeline</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+  Sch[scheduler weighted pick] --> Can{canAct + target exists?}
+  Can -->|like_post / comment_post| Fresh[prefer high-traction posts<br/>score ≥ 80]
+  Can -->|like_comment| Rand[random pending post]
+  Fresh --> Draft{comment? draft + humanize + safety}
+  Draft --> API[Unipile via rate limiter]
+  Rand --> API
+  API --> Log[actions log + quota]
+  API --> Seq[upsert author + advance stage]
+        </pre>
+      </div>
+
+      <h3>Research pipeline</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+  S[pick search strategy] --> U[Unipile search]
+  U --> ICP[deterministic ICP filter]
+  ICP -->|reject| F[status = filtered]
+  ICP -->|pass| Score[OpenAI relevance 0–100]
+  Score -->|below 75| F
+  Score -->|75 or above| Keep[upsert targets pending]
+        </pre>
+      </div>
+
+      <div class="strategy-cards">
+        <div class="strategy-card">
+          <div class="strategy-pct">45%</div>
+          <h4>Posts by keyword</h4>
+          <p>Keyword + region, sort by date</p>
+        </div>
+        <div class="strategy-card">
+          <div class="strategy-pct">25%</div>
+          <h4>Posts past week</h4>
+          <p>Recency-focused feed scan</p>
+        </div>
+        <div class="strategy-card">
+          <div class="strategy-pct">30%</div>
+          <h4>People search</h4>
+          <p>ICP keywords + geo ID batch</p>
+        </div>
+      </div>
+
+      <h3>Post creation pipeline</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+  Day{isPostDay + canAct?} -->|yes| Trends[gatherPostTrends]
+  Trends --> Thin{enough previews?}
+  Thin -->|no| Search[supplemental post search]
+  Search --> Summarize[OpenAI theme bullets]
+  Thin -->|yes| Summarize
+  Summarize --> Draft["draftPost ~85% original · ~15% repost"]
+  Draft --> Safety[safety filter]
+  Safety --> Pub[Unipile createPost]
+  Pub --> Save[savePost + post_boost_until +45m]
+  Save --> Boost[scheduler boosts likes/comments]
+        </pre>
+      </div>
+    </section>
+
+    <!-- ACTIONS -->
+    <section id="actions" class="docs-section">
+      <h2>Actions</h2>
+      <p>Each action is a single LinkedIn verb. Mutating calls always run through <code>executeWithRateLimit</code>.</p>
+
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr><th>Action</th><th>Behavior</th><th>Sequence effect</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>like_post</code></td>
+              <td>80% like / 10% insightful / 10% celebrate</td>
+              <td>author → <code>liked</code></td>
+            </tr>
+            <tr>
+              <td><code>comment_post</code></td>
+              <td>AI draft → humanize → safety → Unipile</td>
+              <td>author → <code>commented</code></td>
+            </tr>
+            <tr>
+              <td><code>like_comment</code></td>
+              <td>Like first comment on a post</td>
+              <td>none</td>
+            </tr>
+            <tr>
+              <td><code>view_profile</code></td>
+              <td>Skip if viewed same id in 7 days; notify=true</td>
+              <td>→ <code>viewed</code> / maybe <code>invite_ready</code></td>
+            </tr>
+            <tr>
+              <td><code>send_invite</code></td>
+              <td>Only <code>invite_ready</code> targets; AI note</td>
+              <td>→ <code>invited</code></td>
+            </tr>
+            <tr>
+              <td><code>create_post</code></td>
+              <td>Trends → draft → publish; sets boost window</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code>research</code></td>
+              <td>Search → ICP filter → score → upsert</td>
+              <td>new <code>discovered</code> targets</td>
+            </tr>
+            <tr>
+              <td><code>profile_audit</code></td>
+              <td>Monday AI suggestions (no auto-apply)</td>
+              <td>—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- AI -->
+    <section id="ai" class="docs-section">
+      <h2>AI layer</h2>
+      <div class="code-grid">
+        <code>research.ts</code>
+        <span>Weighted strategies, pagination, upsert</span>
+        <code>icp-filter.ts</code>
+        <span>Title / geo / exclude + engagement gate</span>
+        <code>target-scorer.ts</code>
+        <span>OpenAI 0–100 relevance JSON</span>
+        <code>comment-writer.ts</code>
+        <span>Comments + invite notes</span>
+        <code>post-writer.ts</code>
+        <span>Original posts or repost commentary</span>
+        <code>humanize.ts</code>
+        <span>Strip em/en dashes, smart quotes</span>
+        <code>post-trends.ts</code>
+        <span>High-score themes for drafting</span>
+        <code>safety-filter.ts</code>
+        <span>Spam / URL / dup + moderation</span>
+        <code>profile-advisor.ts</code>
+        <span>Monday headline / about suggestions</span>
+      </div>
+
+      <h3>ICP filter highlights</h3>
+      <ul class="docs-list">
+        <li>Exclude recruiters, coaches, spam title patterns</li>
+        <li>Exclude India / South Asia locations; prefer US, Europe, UK, Canada, AU, RU</li>
+        <li>People must match include title patterns</li>
+        <li>Posts: unless &lt;6h old, need <code>reactions + 2×comments ≥ 5</code></li>
+        <li>Keep discoveries with relevance score ≥ <strong>75</strong>; engage preferred ≥ <strong>80</strong></li>
+      </ul>
+    </section>
+
+    <!-- RATE LIMITS -->
+    <section id="rate-limits" class="docs-section">
+      <h2>Rate limits</h2>
+      <p>
+        First 14 days use ramp-up bases × 0.5. Afterward, steady caps apply.
+        <code>canAct</code> checks: halt → pause → working hours → backoff → daily quota.
+      </p>
+
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Week 1–2 effective</th>
+              <th>Steady</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>like_post</td><td>15</td><td>60</td></tr>
+            <tr><td>like_comment</td><td>7</td><td>30</td></tr>
+            <tr><td>comment_post</td><td>2</td><td>15</td></tr>
+            <tr><td>send_invite</td><td>5</td><td>25</td></tr>
+            <tr><td>view_profile</td><td>4</td><td>20</td></tr>
+            <tr><td>search</td><td>20</td><td>80</td></tr>
+            <tr><td>create_post</td><td colspan="2">1 on Tue/Thu/Fri only</td></tr>
+            <tr><td>profile_audit</td><td colspan="2">1 on Monday only</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="timing-strip">
+        <div class="timing-item">
+          <strong>45–240s</strong>
+          <span>inter-action delay</span>
+        </div>
+        <div class="timing-item">
+          <strong>3–7</strong>
+          <span>actions per burst</span>
+        </div>
+        <div class="timing-item">
+          <strong>10–25 min</strong>
+          <span>burst pause</span>
+        </div>
+        <div class="timing-item">
+          <strong>429 → 30m</strong>
+          <span>rate limit backoff</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- DATA -->
+    <section id="data" class="docs-section">
+      <h2>Data model</h2>
+      <p>SQLite at <code>data/linkedin-auto.db</code>. Schema in <code>src/db/schema.sql</code>; additive migrations in <code>migrate.ts</code>.</p>
+
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+erDiagram
+  ACTIONS ||--o{ TARGETS : "may reference"
+  TARGETS {
+    string type "post | person"
+    string status "pending | engaged | filtered | invited"
+    int relevance_score
+    string sequence_stage
+    string person_source "post | search"
+  }
+  ACTIONS {
+    string action_type
+    string result
+    string content
+  }
+  POSTS {
+    string format "text | repost"
+    string body
+  }
+  QUOTA_USAGE {
+    string day
+    string action_type
+    int count
+  }
+  AGENT_STATE {
+    string key
+    string value
+  }
+        </pre>
+      </div>
+
+      <ul class="docs-list">
+        <li><strong>actions</strong> — full audit log</li>
+        <li><strong>targets</strong> — posts &amp; people in the pipeline</li>
+        <li><strong>posts</strong> — published content</li>
+        <li><strong>quota_usage</strong> — daily counters</li>
+        <li><strong>agent_state</strong> — heartbeat, halt, <code>post_boost_until</code></li>
+        <li><strong>profile_snapshots</strong> / <strong>follower_history</strong> / <strong>content_history</strong> / <strong>backoff_state</strong></li>
+      </ul>
+    </section>
+
+    <!-- CLIENTS -->
+    <section id="clients" class="docs-section">
+      <h2>Clients &amp; CLI</h2>
+
+      <h3>External services</h3>
+      <ul class="docs-list">
+        <li><strong>Unipile</strong> — LinkedIn search, reactions, comments, invites, posts, profile views</li>
+        <li><strong>OpenAI</strong> — scoring, drafts, moderation (default model <code>gpt-4.1</code>)</li>
+      </ul>
+
+      <h3>CLI</h3>
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr><th>Command</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>npm run agent:start</code></td><td>Foreground daemon</td></tr>
+            <tr><td><code>npx tsx src/cli/index.ts start --daemon</code></td><td>Detached background</td></tr>
+            <tr><td><code>npm run agent:stop</code></td><td>Graceful SIGTERM</td></tr>
+            <tr><td><code>npm run agent:status</code></td><td>Process + quotas</td></tr>
+            <tr><td><code>npm run dry-run</code></td><td>AI runs, no LinkedIn writes</td></tr>
+            <tr><td><code>npm run dashboard</code></td><td>UI at http://127.0.0.1:3847</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <strong>Env flags:</strong>
+        <code>DRY_RUN</code>, <code>PAUSED</code>, <code>TIMEZONE</code>, <code>DASHBOARD_PORT</code> (default 3847),
+        plus Unipile and OpenAI keys.
+      </div>
+
+      <h3>End-to-end data flow</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart LR
+  U[Unipile search] --> F[ICP filter]
+  F --> S[OpenAI score]
+  S --> T[(targets)]
+  T --> Sch[scheduler]
+  Sch --> Draft[AI draft]
+  Draft --> Saf[safety]
+  Saf --> W[Unipile write]
+  W --> Log[(actions + quotas)]
+  Log --> Dash[Dashboard]
+        </pre>
+      </div>
+    </section>
+
+    <footer class="docs-footer">
+      <p>LinkedIn Profile Enhancer · read-only docs served from the dashboard · <a href="/">Back to dashboard</a></p>
+    </footer>
+  </main>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "dark",
+      securityLevel: "loose",
+      themeVariables: {
+        primaryColor: "#1a1d27",
+        primaryTextColor: "#e4e6ed",
+        primaryBorderColor: "#2a2e3d",
+        lineColor: "#0a66c2",
+        secondaryColor: "#151820",
+        tertiaryColor: "#0f1117",
+        background: "#0f1117",
+        mainBkg: "#1a1d27",
+        nodeBorder: "#2a2e3d",
+        clusterBkg: "#151820",
+        titleColor: "#e4e6ed",
+        edgeLabelBackground: "#1a1d27",
+      },
+      gantt: {
+        barHeight: 28,
+        fontSize: 12,
+        sectionFontSize: 13,
+      },
+    });
+  </script>
+</body>
+</html>

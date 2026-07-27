@@ -1,7 +1,7 @@
 import { BRAND } from "../config/brand.js";
 import { chatCompletion, systemPromptWithBrand } from "../clients/openai.js";
 import { getRepostCandidate } from "../db/store.js";
-import { canSharePost } from "./research.js";
+import { canSharePost, resolvePostSocialId } from "./research.js";
 import { safetyFilter } from "./safety-filter.js";
 import type { Target } from "../db/store.js";
 
@@ -84,7 +84,14 @@ async function draftTextPost(recentTrends?: string): Promise<PostDraft | null> {
 async function draftRepostCommentary(
   candidate: Target
 ): Promise<PostDraft | null> {
-  const postId = candidate.social_id ?? candidate.target_id;
+  const repostPostId = resolvePostSocialId(candidate);
+  if (!repostPostId) {
+    console.warn("[post-writer] Repost skipped: missing social_id for target");
+    return null;
+  }
+
+  // Keep the DB key stable (matches targets.social_id used by getRepostCandidate).
+  const sourcePostId = candidate.social_id ?? candidate.target_id;
   const original = candidate.content_preview ?? "";
 
   const system = systemPromptWithBrand(
@@ -120,7 +127,7 @@ Write commentary only. This will appear above a repost.`;
     format: "repost",
     content,
     pillar: "repost",
-    repostPostId: postId,
-    sourcePostId: postId,
+    repostPostId,
+    sourcePostId,
   };
 }
