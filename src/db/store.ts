@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { getDataDir, getDbPath } from "../config/env.js";
+import { isOwnProviderId } from "../config/identity.js";
 import {
   type ActionType,
   getDailyCap,
@@ -164,6 +165,24 @@ export function hasRecentAction(
   return !!row;
 }
 
+/** True when we already succeeded or dry-ran this action on the target. */
+export function hasCompletedAction(
+  actionType: ActionType,
+  targetId: string,
+  withinDays: number
+): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM actions
+       WHERE action_type = ? AND target_id = ?
+         AND result IN ('success', 'dry_run')
+         AND created_at >= datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(actionType, targetId, `-${withinDays} days`) as { 1: number } | undefined;
+  return !!row;
+}
+
 export function hasRecentTarget(targetId: string, withinDays: number): boolean {
   const row = getDb()
     .prepare(
@@ -225,11 +244,35 @@ export function upsertPersonFromPostAuthor(params: {
   sourcePostId: string;
   relevanceScore?: number;
   location?: string | null;
+  personSource?: PersonSource;
 }): string | null {
   const personId =
     params.providerId ??
     (params.publicId ? `person:${params.publicId}` : null);
   if (!personId) return null;
+
+  const personSource = params.personSource ?? "post";
+
+  if (isOwnProviderId(params.providerId) || isOwnProviderId(personId)) {
+    upsertTarget({
+      target_type: "person",
+      target_id: personId,
+      provider_id: params.providerId ?? null,
+      author_name: params.name ?? null,
+      author_headline: params.headline ?? null,
+      author_public_id: params.publicId ?? null,
+      source_post_id: params.sourcePostId,
+      person_source: personSource,
+      relevance_score: 0,
+      status: "filtered",
+      sequence_stage: "discovered",
+      metadata: JSON.stringify({
+        location: params.location ?? undefined,
+        icp_reject_reason: "own profile (self)",
+      }),
+    });
+    return null;
+  }
 
   const icp = passesIcpFilter({
     targetType: "person",
@@ -246,7 +289,7 @@ export function upsertPersonFromPostAuthor(params: {
     author_headline: params.headline ?? null,
     author_public_id: params.publicId ?? null,
     source_post_id: params.sourcePostId,
-    person_source: "post",
+    person_source: personSource,
     relevance_score: icp.pass ? (params.relevanceScore ?? 0) : 0,
     status: icp.pass ? "pending" : "filtered",
     sequence_stage: "discovered",
@@ -334,6 +377,15 @@ function maybePromoteToInviteReady(personId: string): void {
   const person = getPersonTargetById(personId);
   if (!person || person.status === "invited") return;
 
+  const providerId =
+    getResolvedProviderId(person) ??
+    person.provider_id ??
+    person.target_id.replace(/^person:/, "");
+  if (isOwnProviderId(providerId) || isOwnProviderId(person.provider_id)) {
+    updateTargetStatus(person.target_id, "filtered");
+    return;
+  }
+
   const ready = checkInviteReady({
     sequenceStage: person.sequence_stage,
     source: (person.person_source as PersonSource | null) ?? null,
@@ -414,12 +466,16 @@ export function getRandomPendingTarget(
       `SELECT * FROM (
          SELECT * FROM targets
          WHERE target_type = ? AND status = 'pending' AND relevance_score >= ?
+           AND (
+             ? != 'post'
+             OR COALESCE(json_extract(metadata, '$.nurture'), 0) != 1
+           )
          ORDER BY relevance_score DESC
          LIMIT 8
        )
        ORDER BY RANDOM() LIMIT 1`
     )
-    .get(targetType, minScore) as Target | undefined;
+    .get(targetType, minScore, targetType) as Target | undefined;
   return row ?? null;
 }
 
@@ -429,6 +485,7 @@ export function getFreshPostTargetForEngagement(): Target | null {
     .prepare(
       `SELECT * FROM targets
        WHERE target_type = 'post' AND status = 'pending' AND relevance_score >= ?
+       AND COALESCE(json_extract(metadata, '$.nurture'), 0) != 1
        AND (posted_at IS NULL OR posted_at >= datetime('now', '-2 days'))
        AND (
          posted_at >= datetime('now', '-6 hours')
@@ -448,16 +505,31 @@ export function getFreshPostTargetForEngagement(): Target | null {
 }
 
 export function getPersonForInvite(): Target | null {
-  const row = getDb()
+  const rows = getDb()
     .prepare(
       `SELECT * FROM targets
        WHERE target_type = 'person'
          AND status = 'pending'
          AND sequence_stage = 'invite_ready'
-       ORDER BY relevance_score DESC, RANDOM() LIMIT 1`
+       ORDER BY relevance_score DESC, RANDOM() LIMIT 20`
     )
-    .get() as Target | undefined;
-  return row ?? null;
+    .all() as Target[];
+
+  for (const row of rows) {
+    const providerId =
+      getResolvedProviderId(row) ??
+      row.provider_id ??
+      row.target_id.replace(/^person:/, "");
+    if (isOwnProviderId(providerId) || isOwnProviderId(row.provider_id)) {
+      console.warn(
+        `[store] Filtering own profile from invite queue (${providerId})`
+      );
+      updateTargetStatus(row.target_id, "filtered");
+      continue;
+    }
+    return row;
+  }
+  return null;
 }
 
 export function getPersonForProfileView(): Target | null {
@@ -485,17 +557,18 @@ export function getPersonForProfileView(): Target | null {
     .get() as Target | undefined;
   if (postPath) return postPath;
 
-  const searchPerson = getDb()
+  // Search discoveries and people who commented on our posts: view → invite_ready.
+  const warmPerson = getDb()
     .prepare(
       `SELECT * FROM targets
        WHERE target_type = 'person'
          AND status = 'pending'
          AND sequence_stage = 'discovered'
-         AND person_source = 'search'
+         AND person_source IN ('search', 'comment')
        ORDER BY relevance_score DESC, RANDOM() LIMIT 1`
     )
     .get() as Target | undefined;
-  return searchPerson ?? null;
+  return warmPerson ?? null;
 }
 
 export function getRepostCandidate(): Target | null {
@@ -575,6 +648,32 @@ export function markPersonInvited(personId: string): void {
     .run(personId);
 }
 
+export function markInviteWithdrawn(personId: string): void {
+  getDb()
+    .prepare(
+      `UPDATE targets SET status = 'withdrawn', sequence_stage = 'withdrawn',
+       last_engaged_at = datetime('now') WHERE target_id = ?`
+    )
+    .run(personId);
+}
+
+export function findPersonByProviderId(providerId: string): Target | null {
+  if (!providerId) return null;
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM targets
+       WHERE target_type = 'person'
+         AND (
+           provider_id = ?
+           OR json_extract(metadata, '$.resolved_provider_id') = ?
+         )
+       ORDER BY id DESC
+       LIMIT 1`
+    )
+    .get(providerId, providerId) as Target | undefined;
+  return row ?? null;
+}
+
 export function setAgentState(key: string, value: string): void {
   getDb()
     .prepare(
@@ -643,6 +742,41 @@ export function savePost(params: {
       params.format ?? "text",
       params.sourcePostId ?? null
     );
+}
+
+export interface OwnPostRow {
+  id: number;
+  post_id: string;
+  content: string;
+  pillar: string | null;
+  format: string;
+  source_post_id: string | null;
+  published_at: string;
+}
+
+/** Own published posts with a LinkedIn post_id, newest first. */
+export function getRecentOwnPosts(withinHours = 48): OwnPostRow[] {
+  return getDb()
+    .prepare(
+      `SELECT id, post_id, content, pillar, format, source_post_id, published_at
+       FROM posts
+       WHERE post_id IS NOT NULL AND TRIM(post_id) != ''
+         AND published_at >= datetime('now', ?)
+       ORDER BY published_at DESC`
+    )
+    .all(`-${withinHours} hours`) as OwnPostRow[];
+}
+
+export function hasRecentOwnPosts(withinHours = 48): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM posts
+       WHERE post_id IS NOT NULL AND TRIM(post_id) != ''
+         AND published_at >= datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(`-${withinHours} hours`) as { 1: number } | undefined;
+  return !!row;
 }
 
 export function hasContentHash(hash: string): boolean {
@@ -759,7 +893,9 @@ export function getQuotaRemaining(): Record<string, { used: number; cap: number 
     "like_post",
     "like_comment",
     "comment_post",
+    "reply_comment",
     "send_invite",
+    "withdraw_invite",
     "create_post",
     "search",
     "profile_audit",
@@ -773,6 +909,354 @@ export function getQuotaRemaining(): Record<string, { used: number; cap: number 
       return [type, { used, cap }];
     })
   );
+}
+
+// --- First-degree connections / nurture ---
+
+export interface ConnectionRow {
+  id: number;
+  provider_id: string;
+  public_identifier: string | null;
+  full_name: string | null;
+  headline: string | null;
+  profile_url: string | null;
+  connected_at: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  from_invite: number;
+  accepted_at: string | null;
+  last_engaged_at: string | null;
+  metadata: string | null;
+}
+
+export interface UpsertConnectionInput {
+  providerId: string;
+  publicIdentifier?: string | null;
+  fullName?: string | null;
+  headline?: string | null;
+  profileUrl?: string | null;
+  /** LinkedIn connection timestamp (ISO or unix seconds). */
+  connectedAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export function isNurtureTarget(target: Target): boolean {
+  const meta = parseMetadata(target.metadata);
+  return meta.nurture === true;
+}
+
+export function getConnectionByProviderId(
+  providerId: string
+): ConnectionRow | null {
+  if (!providerId) return null;
+  const row = getDb()
+    .prepare("SELECT * FROM connections WHERE provider_id = ? LIMIT 1")
+    .get(providerId) as ConnectionRow | undefined;
+  return row ?? null;
+}
+
+export function isKnownConnection(providerId: string | null | undefined): boolean {
+  if (!providerId) return false;
+  return !!getConnectionByProviderId(providerId);
+}
+
+function toIsoTimestamp(value: string | number | null | undefined): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") {
+    const ms = value < 1e12 ? value * 1000 : value;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const asNum = Number(value);
+  if (!Number.isNaN(asNum) && /^\d+$/.test(String(value).trim())) {
+    return toIsoTimestamp(asNum);
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * Upsert a first-degree relation. Returns whether this row is newly inserted
+ * and whether it was correlated with a prior invite we sent.
+ */
+export function upsertConnection(input: UpsertConnectionInput): {
+  inserted: boolean;
+  fromInvite: boolean;
+  acceptedNow: boolean;
+} {
+  const providerId = input.providerId.trim();
+  if (!providerId || isOwnProviderId(providerId)) {
+    return { inserted: false, fromInvite: false, acceptedNow: false };
+  }
+
+  const existing = getConnectionByProviderId(providerId);
+  const connectedAt =
+    toIsoTimestamp(input.connectedAt) ?? existing?.connected_at ?? null;
+
+  const invitedPerson = findPersonByProviderId(providerId);
+  const inviteAction = getDb()
+    .prepare(
+      `SELECT 1 FROM actions
+       WHERE action_type = 'send_invite'
+         AND result = 'success'
+         AND (target_id = ? OR target_id = ?)
+       LIMIT 1`
+    )
+    .get(providerId, invitedPerson?.target_id ?? providerId) as
+    | { 1: number }
+    | undefined;
+
+  const wasInvited =
+    !!inviteAction ||
+    (!!invitedPerson &&
+      (invitedPerson.status === "invited" ||
+        invitedPerson.sequence_stage === "invited" ||
+        invitedPerson.status === "connected" ||
+        invitedPerson.sequence_stage === "connected"));
+
+  const fromInvite = existing?.from_invite === 1 || wasInvited;
+  let acceptedNow = false;
+  let acceptedAt = existing?.accepted_at ?? null;
+
+  if (!existing) {
+    // New relation: if we previously invited them, this is an acceptance.
+    if (wasInvited) {
+      acceptedAt = connectedAt ?? new Date().toISOString();
+      acceptedNow = true;
+    }
+    getDb()
+      .prepare(
+        `INSERT INTO connections (
+           provider_id, public_identifier, full_name, headline, profile_url,
+           connected_at, from_invite, accepted_at, metadata
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        providerId,
+        input.publicIdentifier ?? null,
+        input.fullName ?? null,
+        input.headline ?? null,
+        input.profileUrl ?? null,
+        connectedAt,
+        fromInvite ? 1 : 0,
+        acceptedAt,
+        JSON.stringify(input.metadata ?? {})
+      );
+  } else {
+    // Existing row: if invite correlation newly applies, mark accept.
+    if (wasInvited && !existing.accepted_at) {
+      acceptedAt = connectedAt ?? new Date().toISOString();
+      acceptedNow = true;
+    }
+    getDb()
+      .prepare(
+        `UPDATE connections SET
+           public_identifier = COALESCE(?, public_identifier),
+           full_name = COALESCE(?, full_name),
+           headline = COALESCE(?, headline),
+           profile_url = COALESCE(?, profile_url),
+           connected_at = COALESCE(?, connected_at),
+           last_seen_at = datetime('now'),
+           from_invite = CASE WHEN ? THEN 1 ELSE from_invite END,
+           accepted_at = COALESCE(accepted_at, ?),
+           metadata = COALESCE(?, metadata)
+         WHERE provider_id = ?`
+      )
+      .run(
+        input.publicIdentifier ?? null,
+        input.fullName ?? null,
+        input.headline ?? null,
+        input.profileUrl ?? null,
+        connectedAt,
+        fromInvite ? 1 : 0,
+        acceptedAt,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        providerId
+      );
+  }
+
+  if (acceptedNow || (wasInvited && invitedPerson)) {
+    markPersonConnected(providerId, acceptedAt ?? new Date().toISOString());
+  }
+
+  return {
+    inserted: !existing,
+    fromInvite,
+    acceptedNow,
+  };
+}
+
+export function markPersonConnected(
+  providerId: string,
+  acceptedAt: string
+): void {
+  const person = findPersonByProviderId(providerId);
+  if (!person) return;
+
+  getDb()
+    .prepare(
+      `UPDATE targets SET
+         status = 'connected',
+         sequence_stage = 'connected',
+         last_engaged_at = datetime('now'),
+         metadata = json_set(
+           COALESCE(metadata, '{}'),
+           '$.accepted_at',
+           ?,
+           '$.connected',
+           json('true')
+         )
+       WHERE target_id = ?`
+    )
+    .run(acceptedAt, person.target_id);
+}
+
+export function touchConnectionEngaged(providerId: string): void {
+  if (!providerId) return;
+  getDb()
+    .prepare(
+      `UPDATE connections SET last_engaged_at = datetime('now')
+       WHERE provider_id = ?`
+    )
+    .run(providerId);
+}
+
+export function getConnectionStats(): {
+  total: number;
+  fromInvite: number;
+  accepted7d: number;
+  accepted14d: number;
+} {
+  const database = getDb();
+  const total = (
+    database.prepare("SELECT COUNT(*) as c FROM connections").get() as {
+      c: number;
+    }
+  ).c;
+  const fromInvite = (
+    database
+      .prepare("SELECT COUNT(*) as c FROM connections WHERE from_invite = 1")
+      .get() as { c: number }
+  ).c;
+  const accepted7d = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM connections
+         WHERE accepted_at IS NOT NULL
+           AND accepted_at >= datetime('now', '-7 days')`
+      )
+      .get() as { c: number }
+  ).c;
+  const accepted14d = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM connections
+         WHERE accepted_at IS NOT NULL
+           AND accepted_at >= datetime('now', '-14 days')`
+      )
+      .get() as { c: number }
+  ).c;
+  return { total, fromInvite, accepted7d, accepted14d };
+}
+
+/**
+ * Pick a pending nurture post, preferring recent accepts and respecting
+ * per-connection cooldowns.
+ */
+export function getNurturePostTargetForEngagement(): Target | null {
+  const recentDays = LIMITS.nurture.recentAcceptDays;
+  const cooldownDays = LIMITS.nurture.connectionCooldownDays;
+
+  const row = getDb()
+    .prepare(
+      `SELECT t.* FROM targets t
+       WHERE t.target_type = 'post'
+         AND t.status = 'pending'
+         AND json_extract(t.metadata, '$.nurture') = 1
+         AND (t.posted_at IS NULL OR t.posted_at >= datetime('now', '-2 days'))
+         AND (
+           t.posted_at >= datetime('now', '-6 hours')
+           OR COALESCE(json_extract(t.metadata, '$.reaction_counter'), 0)
+              + 2 * COALESCE(json_extract(t.metadata, '$.comment_counter'), 0)
+              >= ?
+         )
+         AND (
+           t.author_provider_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM connections c
+             WHERE c.provider_id = t.author_provider_id
+               AND c.last_engaged_at IS NOT NULL
+               AND c.last_engaged_at >= datetime('now', ?)
+           )
+         )
+       ORDER BY
+         CASE
+           WHEN EXISTS (
+             SELECT 1 FROM connections c
+             WHERE c.provider_id = t.author_provider_id
+               AND c.accepted_at IS NOT NULL
+               AND c.accepted_at >= datetime('now', ?)
+           ) THEN 0
+           ELSE 1
+         END,
+         COALESCE(json_extract(t.metadata, '$.reaction_counter'), 0)
+           + 2 * COALESCE(json_extract(t.metadata, '$.comment_counter'), 0) DESC,
+         t.posted_at DESC,
+         t.relevance_score DESC
+       LIMIT 1`
+    )
+    .get(
+      LIMITS.minPostReactions,
+      `-${cooldownDays} days`,
+      `-${recentDays} days`
+    ) as Target | undefined;
+
+  return row ?? null;
+}
+
+export function countNurtureActionsToday(): {
+  likes: number;
+  comments: number;
+} {
+  const today = new Date().toISOString().slice(0, 10);
+  const likes = (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) as c FROM actions a
+         JOIN targets t ON t.target_id = a.target_id OR t.social_id = a.target_id
+         WHERE a.action_type = 'like_post'
+           AND a.result IN ('success', 'dry_run')
+           AND date(a.created_at) = ?
+           AND json_extract(t.metadata, '$.nurture') = 1`
+      )
+      .get(today) as { c: number }
+  ).c;
+  const comments = (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) as c FROM actions a
+         JOIN targets t ON t.target_id = a.target_id OR t.social_id = a.target_id
+         WHERE a.action_type = 'comment_post'
+           AND a.result IN ('success', 'dry_run')
+           AND date(a.created_at) = ?
+           AND json_extract(t.metadata, '$.nurture') = 1`
+      )
+      .get(today) as { c: number }
+  ).c;
+  return { likes, comments };
+}
+
+export function countPendingNurturePosts(): number {
+  return (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) as c FROM targets
+         WHERE target_type = 'post'
+           AND status = 'pending'
+           AND json_extract(metadata, '$.nurture') = 1`
+      )
+      .get() as { c: number }
+  ).c;
 }
 
 export { stageRank, checkInviteReady };

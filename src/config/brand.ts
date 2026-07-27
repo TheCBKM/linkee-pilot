@@ -20,7 +20,7 @@ export const BRAND = {
     "multi-tenant SaaS",
   ],
   voice:
-    "Technical but accessible. Write like a CTO who ships: genuine lessons, sharp questions, no hype or vendor spam. Never pitch the product in comments or invites. Never use em dashes.",
+    "Technical but accessible. Write like a CTO who ships: genuine lessons, sharp questions, no hype or vendor spam. Never pitch the product in comments or invites. NEVER use em dashes (—), en dashes (–), or double-hyphen dashes. Use commas, periods, or a single hyphen instead.",
   icpTargets: [
     "VP Engineering / Engineering Directors in US, Europe, UK, Australia",
     "Engineering managers at SaaS companies (US / EU / UK / AU / RU)",

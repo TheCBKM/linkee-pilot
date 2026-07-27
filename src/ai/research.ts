@@ -4,6 +4,7 @@ import {
   pickLocationBatch,
   pickPreferredRegionId,
 } from "../config/icp.js";
+import { isOwnProviderId } from "../config/identity.js";
 import { LIMITS } from "../config/limits.js";
 import { linkedinSearch, type LinkedInSearchParams } from "../clients/unipile.js";
 import {
@@ -12,10 +13,11 @@ import {
   upsertPersonFromPostAuthor,
   getQuotaCount,
   getAccountAgeDays,
+  isKnownConnection,
 } from "../db/store.js";
 import { canAct, recordAction } from "../rate-limiter/quota.js";
 import { getDailyCap } from "../config/limits.js";
-import { passesIcpFilter } from "./icp-filter.js";
+import { passesIcpFilter, passesEngagementGate } from "./icp-filter.js";
 import { scoreTarget } from "./target-scorer.js";
 
 export interface DiscoveredTarget {
@@ -34,6 +36,8 @@ export interface DiscoveredTarget {
   reaction_count?: number;
   comment_count?: number;
   metadata?: Record<string, unknown>;
+  /** First-degree connection nurture discovery. */
+  nurture?: boolean;
 }
 
 const SEARCH_PAGE_SIZE = 25;
@@ -42,6 +46,7 @@ const MIN_CANDIDATES_FOR_PAGINATION = 5;
 interface SearchStrategy {
   weight: number;
   category: "posts" | "people";
+  nurture?: boolean;
   buildParams: () => LinkedInSearchParams;
 }
 
@@ -90,6 +95,20 @@ function pickStrategy(): SearchStrategy {
         limit: SEARCH_PAGE_SIZE,
       }),
     },
+    {
+      // Occasional first-degree post discovery for network nurture.
+      weight: LIMITS.nurture.researchWeight,
+      category: "posts",
+      nurture: true,
+      buildParams: () => ({
+        category: "posts",
+        keywords: keyword,
+        sort_by: "date",
+        date_posted: "past_week",
+        network_distance: [1],
+        limit: SEARCH_PAGE_SIZE,
+      }),
+    },
   ];
 
   const total = strategies.reduce((sum, s) => sum + s.weight, 0);
@@ -123,6 +142,7 @@ export async function runResearch(): Promise<DiscoveredTarget[]> {
   const discovered: DiscoveredTarget[] = [];
   const strategy = pickStrategy();
   const params = strategy.buildParams();
+  const isNurture = strategy.nurture === true;
 
   try {
     let acceptedCount = 0;
@@ -146,9 +166,84 @@ export async function runResearch(): Promise<DiscoveredTarget[]> {
 
       const items = result.items ?? [];
       for (const item of items) {
-        const parsed = parseSearchItem(item, strategy.category);
+        const parsed = parseSearchItem(item, strategy.category, isNurture);
         if (!parsed) continue;
         if (hasRecentTarget(parsed.target_id, LIMITS.dedupWindowDays)) continue;
+
+        const isSelf =
+          isOwnProviderId(parsed.provider_id) ||
+          isOwnProviderId(parsed.author_provider_id) ||
+          isOwnProviderId(parsed.target_id);
+        if (isSelf) {
+          upsertTarget({
+            target_type: parsed.target_type,
+            target_id: parsed.target_id,
+            provider_id: parsed.provider_id ?? null,
+            social_id: parsed.social_id ?? null,
+            author_name: parsed.author_name ?? null,
+            author_headline: parsed.author_headline ?? null,
+            content_preview: parsed.content_preview ?? null,
+            relevance_score: 0,
+            status: "filtered",
+            metadata: JSON.stringify({
+              ...(parsed.metadata ?? {}),
+              location: parsed.location,
+              reaction_counter: parsed.reaction_count,
+              comment_counter: parsed.comment_count,
+              icp_reject_reason: "own profile (self)",
+              nurture: isNurture || undefined,
+            }),
+            sequence_stage: "discovered",
+            author_provider_id: parsed.author_provider_id ?? null,
+            author_public_id: parsed.author_public_id ?? null,
+            posted_at: parsed.posted_at ?? null,
+            person_source: parsed.person_source ?? null,
+          });
+          continue;
+        }
+
+        const knownConnection = isKnownConnection(parsed.author_provider_id);
+        const treatAsNurture = isNurture || knownConnection;
+
+        if (treatAsNurture && parsed.target_type === "post") {
+          const gate = passesEngagementGate({
+            targetType: "post",
+            reactionCount: parsed.reaction_count,
+            commentCount: parsed.comment_count,
+            postedAt: parsed.posted_at,
+          });
+          if (!gate.pass) continue;
+
+          const score = LIMITS.nurture.defaultRelevanceScore;
+          upsertTarget({
+            target_type: "post",
+            target_id: parsed.target_id,
+            provider_id: parsed.provider_id ?? null,
+            social_id: parsed.social_id ?? null,
+            author_name: parsed.author_name ?? null,
+            author_headline: parsed.author_headline ?? null,
+            content_preview: parsed.content_preview ?? null,
+            relevance_score: score,
+            status: "pending",
+            metadata: JSON.stringify({
+              ...(parsed.metadata ?? {}),
+              location: parsed.location,
+              reaction_counter: parsed.reaction_count,
+              comment_counter: parsed.comment_count,
+              nurture: true,
+              connection_provider_id: parsed.author_provider_id,
+            }),
+            sequence_stage: "discovered",
+            author_provider_id: parsed.author_provider_id ?? null,
+            author_public_id: parsed.author_public_id ?? null,
+            posted_at: parsed.posted_at ?? null,
+            person_source: null,
+          });
+
+          discovered.push({ ...parsed, nurture: true });
+          acceptedCount++;
+          continue;
+        }
 
         const icp = passesIcpFilter({
           targetType: parsed.target_type,
@@ -241,7 +336,8 @@ export async function runResearch(): Promise<DiscoveredTarget[]> {
 
 function parseSearchItem(
   item: Record<string, unknown>,
-  category: string
+  category: string,
+  nurture = false
 ): DiscoveredTarget | null {
   if (category === "posts") {
     const socialId = String(
@@ -278,6 +374,7 @@ function parseSearchItem(
       reaction_count: reactionCount,
       comment_count: commentCount,
       metadata: item,
+      nurture: nurture || undefined,
     };
   }
 
@@ -348,7 +445,8 @@ export function resolvePostSocialId(target: {
   return normalizeLinkedInPostId(target.social_id ?? target.target_id);
 }
 
-function normalizeLinkedInPostId(value: unknown): string | null {
+/** Normalize LinkedIn post ids to a Unipile-friendly URN when possible. */
+export function normalizeLinkedInPostId(value: unknown): string | null {
   if (value == null) return null;
   const raw = String(value).trim();
   if (!raw) return null;

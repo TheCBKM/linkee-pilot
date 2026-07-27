@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Architecture Docs — LinkedIn Agent</title>
+  <title>Architecture Docs · LinkedIn Profile Enhancer</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/docs.css">
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 </head>
 <body class="docs-page">
-  <nav class="docs-nav">
-    <a href="/" class="docs-nav-brand">LinkedIn Agent</a>
-    <div class="docs-nav-links">
+  <nav class="site-nav">
+    <a href="/" class="site-nav-brand">Profile Enhancer</a>
+    <div class="site-nav-links">
       <a href="/">Dashboard</a>
       <a href="/docs" class="active">Docs</a>
     </div>
   </nav>
 
-  <aside class="docs-toc">
+  <aside class="docs-toc" aria-label="Table of contents">
     <p class="toc-title">Contents</p>
     <ol>
       <li><a href="#overview">Overview</a></li>
@@ -25,21 +25,41 @@
       <li><a href="#daemon">Daemon loop</a></li>
       <li><a href="#schedule">Schedule &amp; windows</a></li>
       <li><a href="#pipelines">Pipelines</a></li>
+      <li><a href="#nurture">Network nurture</a></li>
       <li><a href="#actions">Actions</a></li>
       <li><a href="#ai">AI layer</a></li>
       <li><a href="#rate-limits">Rate limits</a></li>
+      <li><a href="#notifications">Notifications</a></li>
       <li><a href="#data">Data model</a></li>
       <li><a href="#clients">Clients &amp; CLI</a></li>
     </ol>
   </aside>
 
   <main class="docs-main">
+    <details class="docs-mobile-toc">
+      <summary>On this page</summary>
+      <ol>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#daemon">Daemon loop</a></li>
+        <li><a href="#schedule">Schedule &amp; windows</a></li>
+        <li><a href="#pipelines">Pipelines</a></li>
+        <li><a href="#nurture">Network nurture</a></li>
+        <li><a href="#actions">Actions</a></li>
+        <li><a href="#ai">AI layer</a></li>
+        <li><a href="#rate-limits">Rate limits</a></li>
+        <li><a href="#notifications">Notifications</a></li>
+        <li><a href="#data">Data model</a></li>
+        <li><a href="#clients">Clients &amp; CLI</a></li>
+      </ol>
+    </details>
+
     <header class="docs-hero">
       <p class="docs-eyebrow">Technical reference</p>
       <h1>How the agent works</h1>
       <p class="docs-lead">
         A continuous LinkedIn daemon — not cron jobs. One action at a time,
-        human-like delays, warm outreach sequences, and a full SQLite audit trail.
+        human-like delays, warm outreach sequences, network nurture, and a full SQLite audit trail.
       </p>
     </header>
 
@@ -74,7 +94,7 @@
         <div class="layer-card">
           <span class="layer-num">03</span>
           <h3>Actions</h3>
-          <p>Like, comment, view, invite, post, research</p>
+          <p>Like, comment, reply, view, invite, withdraw, sync, post, research</p>
         </div>
         <div class="layer-card">
           <span class="layer-num">04</span>
@@ -90,6 +110,11 @@
           <span class="layer-num">06</span>
           <h3>SQLite + Dashboard</h3>
           <p>Audit trail and read-only UI</p>
+        </div>
+        <div class="layer-card">
+          <span class="layer-num">07</span>
+          <h3>Notifications</h3>
+          <p>Optional Discord webhook alerts</p>
         </div>
       </div>
     </section>
@@ -110,13 +135,15 @@ flowchart TB
   Daemon --> Scheduler["Session scheduler"]
   Scheduler --> Quota["Rate limiter / quotas"]
   Scheduler --> Store[("SQLite<br/>db/store.ts")]
-  Daemon --> Actions["Actions<br/>like · comment · view · invite · post"]
+  Daemon --> Actions["Actions<br/>like · comment · reply · view · invite · withdraw · sync · post"]
   Actions --> RL["executeWithRateLimit"]
   Actions --> AI["AI modules"]
   Actions --> Unipile["Unipile client"]
+  Actions --> Discord["Discord webhook<br/>optional"]
   AI --> OpenAI["OpenAI client"]
   AI --> Store
   RL --> Store
+  RL --> Discord
   Dashboard["Dashboard<br/>:3847"] -->|readonly| Store
         </pre>
       </div>
@@ -132,7 +159,9 @@ flowchart TB
         <code>src/rate-limiter/</code>
         <span>Quotas, schedule windows, human delays</span>
         <code>src/config/</code>
-        <span>Brand, ICP, limits, sequence rules</span>
+        <span>Brand, ICP, limits, sequence, identity</span>
+        <code>src/notifications/</code>
+        <span>Discord webhook embeds</span>
         <code>src/db/</code>
         <span>Schema, migrations, store helpers</span>
         <code>src/clients/</code>
@@ -194,13 +223,15 @@ flowchart TD
         <li><span class="prio">1</span> Off hours → idle</li>
         <li><span class="prio">2</span> Monday + quota → <code>profile_audit</code></li>
         <li><span class="prio">3</span> Tue / Thu / Fri + quota → <code>create_post</code> (beats engagement)</li>
-        <li><span class="prio">4</span> Weighted candidates for current time window (or post-boost weights)</li>
-        <li><span class="prio">5</span> No candidates → <code>research</code> if search allowed, else idle</li>
-        <li><span class="prio">6</span> 8% browse pause (extra human delay) unless post-boost is active</li>
+        <li><span class="prio">4</span> Stale invite withdrawal when due</li>
+        <li><span class="prio">5</span> Connection sync when due (randomized, no engagement quota)</li>
+        <li><span class="prio">6</span> Weighted candidates for current time window (or post-boost weights)</li>
+        <li><span class="prio">7</span> No candidates → <code>research</code> if search allowed, else idle</li>
+        <li><span class="prio">8</span> 8% browse pause (skipped while post-boost is active)</li>
       </ol>
 
       <h3>Weekly rhythm</h3>
-      <div class="week-grid" aria-hidden="false">
+      <div class="week-grid" aria-label="Weekly rhythm">
         <div class="week-day off"><span>Sun</span><em>off</em></div>
         <div class="week-day audit"><span>Mon</span><em>profile audit</em></div>
         <div class="week-day post"><span>Tue</span><em>post day</em></div>
@@ -249,27 +280,27 @@ flowchart TD
             <tr>
               <td>morning</td>
               <td>8–10</td>
-              <td>search:3 · like:2 · comment:2</td>
+              <td>reply:4 · search:3 · like:2 · comment:2</td>
             </tr>
             <tr>
               <td>midday</td>
               <td>11–13</td>
-              <td>comment:3 · like_comment:2 · like:2</td>
+              <td>reply:4 · comment:3 · like_comment:2 · like:2</td>
             </tr>
             <tr>
               <td>afternoon</td>
               <td>14–16</td>
-              <td>view:3 · invite:3 · like:2 · search:2</td>
+              <td>view:3 · invite:3 · like:2 · search:2 · reply:2</td>
             </tr>
             <tr>
               <td>late_afternoon</td>
               <td>17–18</td>
-              <td>like:2 · comment:2 · view:2 · like_comment:2</td>
+              <td>reply:3 · like:2 · comment:2 · view:2 · like_comment:2</td>
             </tr>
             <tr>
               <td>post_boost</td>
               <td>+45 min after publish</td>
-              <td>like:5 · comment:5 · view:2 · like_comment:1 · search:1 · <em>no invites</em></td>
+              <td>reply:8 · like:4 · comment:3 · view:2 · like_comment:1 · search:1 · <em>no invites</em></td>
             </tr>
           </tbody>
         </table>
@@ -286,10 +317,12 @@ flowchart TD
             <tr><td>Working hours</td><td>Mon–Fri 08–19</td><td>Gate for all actions</td></tr>
             <tr><td>Post days</td><td>Tue / Thu / Fri</td><td>At most 1 <code>create_post</code> / day</td></tr>
             <tr><td>Profile audit</td><td>Monday</td><td>At most 1 <code>profile_audit</code> / day</td></tr>
-            <tr><td>Post boost</td><td>45 min after publish</td><td>Engagement-biased weights, no invites</td></tr>
+            <tr><td>Post boost</td><td>45 min after publish</td><td>Reply-heavy weights, no invites, no browse pause</td></tr>
+            <tr><td>Stale invite withdrawal</td><td>When due (quota available)</td><td>Cancel invites older than 21 days</td></tr>
+            <tr><td>Connection sync</td><td>Randomized 3–8h (max 3/day)</td><td>Backfill once, then first-page refresh</td></tr>
             <tr><td>Human delay</td><td>After each action</td><td>Gaussian 45–240s (mean 90s)</td></tr>
             <tr><td>Burst pause</td><td>After 3–7 actions</td><td>Random 10–25 min idle</td></tr>
-            <tr><td>Browse pause</td><td>8% chance</td><td>Extra human delay as <code>sleep</code></td></tr>
+            <tr><td>Browse pause</td><td>8% chance (off during boost)</td><td>Extra human delay as <code>sleep</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -317,6 +350,10 @@ flowchart TD
         <div class="seq-step ready">invite_ready</div>
         <div class="seq-arrow">→</div>
         <div class="seq-step done">invited</div>
+        <div class="seq-arrow">→</div>
+        <div class="seq-step">withdrawn</div>
+        <div class="seq-arrow">/</div>
+        <div class="seq-step ready">connected</div>
       </div>
 
       <div class="diagram-wrap">
@@ -329,8 +366,12 @@ flowchart LR
   V --> IR[invite_ready]
   P -->|source = search| V2[view profile]
   V2 --> IR
+  P -->|source = comment| V3[view profile]
+  V3 --> IR
   IR --> I[send_invite]
   I --> Inv[invited]
+  Inv -->|21+ days pending| W[withdrawn]
+  Inv -->|accept detected| Conn[connected]
         </pre>
       </div>
 
@@ -339,6 +380,36 @@ flowchart LR
         <ul>
           <li><strong>Post-sourced:</strong> must have commented <em>and</em> viewed</li>
           <li><strong>Search-sourced:</strong> must have viewed (no cold invite without a view)</li>
+          <li><strong>Comment-sourced:</strong> own-post commenters need a profile view only</li>
+        </ul>
+      </div>
+
+      <h3 id="nurture">Network nurture</h3>
+      <p>
+        Alongside cold ICP outreach, the agent occasionally engages first-degree
+        connections so LinkedIn activity looks more human. Nurture likes/comments
+        share daily like/comment quotas but never advance the invite sequence.
+      </p>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart LR
+  Sync[sync_connections] --> Conn[(connections table)]
+  Conn -->|recent accepts| Pref[priority boost]
+  Research[research network_distance=1] --> NPost[nurture post targets]
+  Pref --> Pick[occasional like/comment]
+  NPost --> Pick
+  Pick --> Cool[per-connection cooldown]
+  Cool --> Done[engaged, no invite stage]
+        </pre>
+      </div>
+      <div class="callout callout-info">
+        <strong>Sync safety</strong>
+        <ul>
+          <li>Initial full relation backfill once, then first-page refreshes only</li>
+          <li>Max 3 syncs/day after backfill, spaced randomly 3–8 hours apart</li>
+          <li>Accepts inferred by correlating new relations with prior successful invites</li>
+          <li><code>sync_connections</code> does not consume engagement quotas</li>
+          <li>In <code>DRY_RUN</code>, sync schedules state but skips Unipile API calls</li>
         </ul>
       </div>
 
@@ -347,13 +418,19 @@ flowchart LR
         <pre class="mermaid">
 flowchart TD
   Sch[scheduler weighted pick] --> Can{canAct + target exists?}
-  Can -->|like_post / comment_post| Fresh[prefer high-traction posts<br/>score ≥ 80]
+  Can -->|like_post / comment_post| Pick[pickEngagementTarget]
+  Pick -->|~28% nurture available| Nur[nurture post · cooldown]
+  Pick -->|else| Fresh[prefer high-traction posts<br/>score ≥ 80]
   Can -->|like_comment| Rand[random pending post]
-  Fresh --> Draft{comment? draft + humanize + safety}
+  Can -->|reply_comment| Own[own post comments &lt;48h]
+  Nur --> Draft{comment? draft + humanize + safety}
+  Fresh --> Draft
   Draft --> API[Unipile via rate limiter]
   Rand --> API
+  Own --> API
   API --> Log[actions log + quota]
-  API --> Seq[upsert author + advance stage]
+  Fresh --> Seq[upsert author + advance stage]
+  Nur --> SkipSeq[no sequence advance]
         </pre>
       </div>
 
@@ -362,7 +439,8 @@ flowchart TD
         <pre class="mermaid">
 flowchart TD
   S[pick search strategy] --> U[Unipile search]
-  U --> ICP[deterministic ICP filter]
+  U -->|nurture strategy| NKeep[upsert nurture targets<br/>score 88 · skip ICP/AI]
+  U -->|ICP strategies| ICP[deterministic ICP filter]
   ICP -->|reject| F[status = filtered]
   ICP -->|pass| Score[OpenAI relevance 0–100]
   Score -->|below 75| F
@@ -370,21 +448,26 @@ flowchart TD
         </pre>
       </div>
 
-      <div class="strategy-cards">
+      <div class="strategy-cards strategy-cards-4">
         <div class="strategy-card">
-          <div class="strategy-pct">45%</div>
+          <div class="strategy-pct">~41%</div>
           <h4>Posts by keyword</h4>
-          <p>Keyword + region, sort by date</p>
+          <p>Weight 45 of 110 · keyword + region, sort by date</p>
         </div>
         <div class="strategy-card">
-          <div class="strategy-pct">25%</div>
+          <div class="strategy-pct">~23%</div>
           <h4>Posts past week</h4>
-          <p>Recency-focused feed scan</p>
+          <p>Weight 25 of 110 · recency-focused feed scan</p>
         </div>
         <div class="strategy-card">
-          <div class="strategy-pct">30%</div>
+          <div class="strategy-pct">~27%</div>
           <h4>People search</h4>
-          <p>ICP keywords + geo ID batch</p>
+          <p>Weight 30 of 110 · ICP keywords + geo ID batch</p>
+        </div>
+        <div class="strategy-card">
+          <div class="strategy-pct">~9%</div>
+          <h4>Nurture network</h4>
+          <p>Weight 10 of 110 · <code>network_distance=[1]</code></p>
         </div>
       </div>
 
@@ -401,7 +484,7 @@ flowchart TD
   Draft --> Safety[safety filter]
   Safety --> Pub[Unipile createPost]
   Pub --> Save[savePost + post_boost_until +45m]
-  Save --> Boost[scheduler boosts likes/comments]
+  Save --> Boost[scheduler boosts replies/likes/comments]
         </pre>
       </div>
     </section>
@@ -409,7 +492,7 @@ flowchart TD
     <!-- ACTIONS -->
     <section id="actions" class="docs-section">
       <h2>Actions</h2>
-      <p>Each action is a single LinkedIn verb. Mutating calls always run through <code>executeWithRateLimit</code>.</p>
+      <p>Each action is a single LinkedIn verb. Mutating engagement calls run through <code>executeWithRateLimit</code>. Connection sync is quota-free.</p>
 
       <div class="table-wrap">
         <table class="docs-table">
@@ -419,17 +502,22 @@ flowchart TD
           <tbody>
             <tr>
               <td><code>like_post</code></td>
-              <td>80% like / 10% insightful / 10% celebrate</td>
-              <td>author → <code>liked</code></td>
+              <td>80% like / 10% insightful / 10% celebrate; may pick nurture targets</td>
+              <td>author → <code>liked</code> (skipped for nurture)</td>
             </tr>
             <tr>
               <td><code>comment_post</code></td>
-              <td>AI draft → humanize → safety → Unipile</td>
-              <td>author → <code>commented</code></td>
+              <td>AI draft → humanize → safety → Unipile; may pick nurture</td>
+              <td>author → <code>commented</code> (skipped for nurture)</td>
+            </tr>
+            <tr>
+              <td><code>reply_comment</code></td>
+              <td>Reply to comments on own posts (48h); skip self/company; upsert commenter</td>
+              <td>commenter person → <code>discovered</code> (<code>person_source=comment</code>)</td>
             </tr>
             <tr>
               <td><code>like_comment</code></td>
-              <td>Like first comment on a post</td>
+              <td>Like first non-own, non-company comment on a post</td>
               <td>none</td>
             </tr>
             <tr>
@@ -439,8 +527,18 @@ flowchart TD
             </tr>
             <tr>
               <td><code>send_invite</code></td>
-              <td>Only <code>invite_ready</code> targets; AI note</td>
+              <td>Only <code>invite_ready</code> targets; AI note; blocks <code>OWN_PROVIDER_ID</code></td>
               <td>→ <code>invited</code></td>
+            </tr>
+            <tr>
+              <td><code>withdraw_invite</code></td>
+              <td>Cancel oldest pending invite ≥21 days; idle day if none</td>
+              <td>→ <code>withdrawn</code></td>
+            </tr>
+            <tr>
+              <td><code>sync_connections</code></td>
+              <td>Backfill/refresh first-degree relations; detect accepts</td>
+              <td>matched invitees → <code>connected</code></td>
             </tr>
             <tr>
               <td><code>create_post</code></td>
@@ -449,7 +547,7 @@ flowchart TD
             </tr>
             <tr>
               <td><code>research</code></td>
-              <td>Search → ICP filter → score → upsert</td>
+              <td>Search → ICP filter → score → upsert (nurture bypasses scoring)</td>
               <td>new <code>discovered</code> targets</td>
             </tr>
             <tr>
@@ -467,23 +565,25 @@ flowchart TD
       <h2>AI layer</h2>
       <div class="code-grid">
         <code>research.ts</code>
-        <span>Weighted strategies, pagination, upsert</span>
+        <span>Weighted strategies (incl. nurture), pagination, upsert</span>
         <code>icp-filter.ts</code>
         <span>Title / geo / exclude + engagement gate</span>
         <code>target-scorer.ts</code>
         <span>OpenAI 0–100 relevance JSON</span>
         <code>comment-writer.ts</code>
-        <span>Comments + invite notes</span>
+        <span>Comments, invite notes, own-post replies</span>
         <code>post-writer.ts</code>
         <span>Original posts or repost commentary</span>
         <code>humanize.ts</code>
-        <span>Strip em/en dashes, smart quotes</span>
+        <span>Strip em/en dashes, smart quotes; <code>assertPublishableContent</code></span>
         <code>post-trends.ts</code>
         <span>High-score themes for drafting</span>
         <code>safety-filter.ts</code>
-        <span>Spam / URL / dup + moderation</span>
+        <span>Spam / URL / dup / em-dash + moderation</span>
         <code>profile-advisor.ts</code>
         <span>Monday headline / about suggestions</span>
+        <code>identity.ts</code>
+        <span><code>OWN_PROVIDER_ID</code> self-target guards</span>
       </div>
 
       <h3>ICP filter highlights</h3>
@@ -493,7 +593,15 @@ flowchart TD
         <li>People must match include title patterns</li>
         <li>Posts: unless &lt;6h old, need <code>reactions + 2×comments ≥ 5</code></li>
         <li>Keep discoveries with relevance score ≥ <strong>75</strong>; engage preferred ≥ <strong>80</strong></li>
+        <li>Nurture network posts skip ICP/AI and use fixed relevance <strong>88</strong></li>
       </ul>
+
+      <h3>Em-dash publishing gate</h3>
+      <p>
+        Content containing em/en dashes is blocked at three layers before any
+        Unipile write: safety filter, rate limiter (<code>contains_em_dash</code>),
+        and <code>assertPublishableContent</code> in the Unipile client.
+      </p>
     </section>
 
     <!-- RATE LIMITS -->
@@ -517,11 +625,14 @@ flowchart TD
             <tr><td>like_post</td><td>15</td><td>60</td></tr>
             <tr><td>like_comment</td><td>7</td><td>30</td></tr>
             <tr><td>comment_post</td><td>2</td><td>15</td></tr>
+            <tr><td>reply_comment</td><td>2</td><td>10</td></tr>
             <tr><td>send_invite</td><td>5</td><td>25</td></tr>
+            <tr><td>withdraw_invite</td><td>5</td><td>20</td></tr>
             <tr><td>view_profile</td><td>4</td><td>20</td></tr>
             <tr><td>search</td><td>20</td><td>80</td></tr>
             <tr><td>create_post</td><td colspan="2">1 on Tue/Thu/Fri only</td></tr>
             <tr><td>profile_audit</td><td colspan="2">1 on Monday only</td></tr>
+            <tr><td>sync_connections</td><td colspan="2">Quota-free · max 3 syncs/day after backfill</td></tr>
           </tbody>
         </table>
       </div>
@@ -546,6 +657,34 @@ flowchart TD
       </div>
     </section>
 
+    <!-- NOTIFICATIONS -->
+    <section id="notifications" class="docs-section">
+      <h2>Notifications</h2>
+      <p>
+        Optional Discord webhook alerts via <code>src/notifications/discord.ts</code>.
+        Set <code>DISCORD_WEBHOOK_URL</code>; leave empty to disable. Most alerts are
+        fire-and-forget; the shutdown alert is awaited.
+      </p>
+      <div class="table-wrap">
+        <table class="docs-table">
+          <thead>
+            <tr><th>Event</th><th>Severity</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Agent started / stopped</td><td>info</td></tr>
+            <tr><td>Research finished (target count)</td><td>info</td></tr>
+            <tr><td>Post published / draft failed</td><td>info / warn</td></tr>
+            <tr><td>Connection accepts detected</td><td>info</td></tr>
+            <tr><td>Profile audit done</td><td>info</td></tr>
+            <tr><td>Daily quotas exhausted</td><td>info</td></tr>
+            <tr><td>Account halt / 24h block</td><td>critical</td></tr>
+            <tr><td>429 / day-block backoff</td><td>warn</td></tr>
+            <tr><td>Generic action failure</td><td>warn</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- DATA -->
     <section id="data" class="docs-section">
       <h2>Data model</h2>
@@ -557,10 +696,15 @@ erDiagram
   ACTIONS ||--o{ TARGETS : "may reference"
   TARGETS {
     string type "post | person"
-    string status "pending | engaged | filtered | invited"
+    string status "pending | engaged | filtered | invited | withdrawn | connected"
     int relevance_score
     string sequence_stage
-    string person_source "post | search"
+    string person_source "post | search | comment"
+  }
+  CONNECTIONS {
+    string provider_id
+    string accepted_at
+    int from_invite
   }
   ACTIONS {
     string action_type
@@ -580,15 +724,17 @@ erDiagram
     string key
     string value
   }
+  CONNECTIONS ||--o{ TARGETS : "may match invite"
         </pre>
       </div>
 
       <ul class="docs-list">
         <li><strong>actions</strong> — full audit log</li>
-        <li><strong>targets</strong> — posts &amp; people in the pipeline</li>
+        <li><strong>targets</strong> — posts &amp; people in the pipeline (nurture posts flagged in metadata)</li>
+        <li><strong>connections</strong> — synced first-degree relations + accept timestamps</li>
         <li><strong>posts</strong> — published content</li>
         <li><strong>quota_usage</strong> — daily counters</li>
-        <li><strong>agent_state</strong> — heartbeat, halt, <code>post_boost_until</code></li>
+        <li><strong>agent_state</strong> — heartbeat, halt, <code>post_boost_until</code>, connection sync schedule</li>
         <li><strong>profile_snapshots</strong> / <strong>follower_history</strong> / <strong>content_history</strong> / <strong>backoff_state</strong></li>
       </ul>
     </section>
@@ -599,7 +745,7 @@ erDiagram
 
       <h3>External services</h3>
       <ul class="docs-list">
-        <li><strong>Unipile</strong> — LinkedIn search, reactions, comments, invites, posts, profile views</li>
+        <li><strong>Unipile</strong> — LinkedIn search, reactions, comments, invites, posts, profile views, relations sync</li>
         <li><strong>OpenAI</strong> — scoring, drafts, moderation (default model <code>gpt-4.1</code>)</li>
       </ul>
 
@@ -622,7 +768,11 @@ erDiagram
 
       <div class="callout">
         <strong>Env flags:</strong>
-        <code>DRY_RUN</code>, <code>PAUSED</code>, <code>TIMEZONE</code>, <code>DASHBOARD_PORT</code> (default 3847),
+        <code>DRY_RUN</code>, <code>PAUSED</code>, <code>TIMEZONE</code>,
+        <code>OWN_PROVIDER_ID</code> (recommended — your LinkedIn provider_id),
+        <code>DISCORD_WEBHOOK_URL</code> (optional),
+        <code>DASHBOARD_HOST</code> (default 127.0.0.1),
+        <code>DASHBOARD_PORT</code> (default 3847),
         plus Unipile and OpenAI keys.
       </div>
 
@@ -651,21 +801,21 @@ flowchart LR
   <script>
     mermaid.initialize({
       startOnLoad: true,
-      theme: "dark",
+      theme: "base",
       securityLevel: "loose",
       themeVariables: {
-        primaryColor: "#1a1d27",
-        primaryTextColor: "#e4e6ed",
-        primaryBorderColor: "#2a2e3d",
+        primaryColor: "#edf3fb",
+        primaryTextColor: "#1b1f23",
+        primaryBorderColor: "#c9d4e3",
         lineColor: "#0a66c2",
-        secondaryColor: "#151820",
-        tertiaryColor: "#0f1117",
-        background: "#0f1117",
-        mainBkg: "#1a1d27",
-        nodeBorder: "#2a2e3d",
-        clusterBkg: "#151820",
-        titleColor: "#e4e6ed",
-        edgeLabelBackground: "#1a1d27",
+        secondaryColor: "#f4f7fb",
+        tertiaryColor: "#ffffff",
+        background: "#f4f7fb",
+        mainBkg: "#ffffff",
+        nodeBorder: "#c9d4e3",
+        clusterBkg: "#edf3fb",
+        titleColor: "#1b1f23",
+        edgeLabelBackground: "#ffffff",
       },
       gantt: {
         barHeight: 28,

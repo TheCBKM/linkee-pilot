@@ -2,6 +2,7 @@ import { createPost } from "../clients/unipile.js";
 import { executeWithRateLimit } from "../rate-limiter/index.js";
 import { savePost, setAgentState, setBackoff } from "../db/store.js";
 import { draftPost } from "../ai/post-writer.js";
+import { notifyDiscord } from "../notifications/discord.js";
 
 const POST_DRAFT_BACKOFF_MS = 30 * 60 * 1000;
 export const POST_BOOST_MS = 45 * 60 * 1000;
@@ -19,6 +20,18 @@ export async function publishPost(recentTrends?: string): Promise<boolean> {
       new Date(Date.now() + POST_DRAFT_BACKOFF_MS),
       "openai_draft_failed"
     );
+    notifyDiscord({
+      title: "Post · Draft failed",
+      description: "OpenAI failed to draft a post. Backing off create_post for 30 minutes.",
+      severity: "warn",
+      fields: [
+        {
+          name: "Error",
+          value: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+          inline: false,
+        },
+      ],
+    });
     return false;
   }
 
@@ -53,6 +66,23 @@ export async function publishPost(recentTrends?: string): Promise<boolean> {
     setAgentState(LAST_PUBLISHED_POST_ID_KEY, postId);
   }
   console.log(`[create-post] Post boost until ${boostUntil}`);
+
+  const snippet =
+    draft.content.length > 180
+      ? `${draft.content.slice(0, 177)}...`
+      : draft.content;
+  notifyDiscord({
+    title: "Post · Published",
+    description: snippet,
+    severity: "info",
+    fields: [
+      { name: "Pillar", value: draft.pillar, inline: true },
+      { name: "Format", value: draft.format, inline: true },
+      ...(postId
+        ? [{ name: "Post ID", value: postId, inline: true }]
+        : []),
+    ],
+  });
 
   return true;
 }

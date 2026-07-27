@@ -24,13 +24,13 @@ CREATE TABLE IF NOT EXISTS targets (
   author_headline TEXT,
   content_preview TEXT,
   relevance_score INTEGER DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending', -- pending | engaged | skipped | invited | filtered
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | engaged | skipped | invited | withdrawn | filtered | connected
   metadata TEXT, -- JSON
   sequence_stage TEXT DEFAULT 'discovered',
   author_provider_id TEXT,
   author_public_id TEXT,
   source_post_id TEXT,
-  person_source TEXT, -- post | search
+  person_source TEXT, -- post | search | comment
   posted_at TEXT,
   discovered_at TEXT NOT NULL DEFAULT (datetime('now')),
   last_engaged_at TEXT
@@ -103,3 +103,25 @@ CREATE TABLE IF NOT EXISTS account_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- First-degree LinkedIn connections (synced via Unipile relations)
+CREATE TABLE IF NOT EXISTS connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id TEXT NOT NULL UNIQUE,
+  public_identifier TEXT,
+  full_name TEXT,
+  headline TEXT,
+  profile_url TEXT,
+  connected_at TEXT,
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  from_invite INTEGER NOT NULL DEFAULT 0,
+  accepted_at TEXT,
+  last_engaged_at TEXT,
+  metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_connections_accepted
+  ON connections(accepted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_connections_engaged
+  ON connections(last_engaged_at);

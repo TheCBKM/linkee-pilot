@@ -6,6 +6,7 @@ import {
   getRecentContent,
 } from "../db/store.js";
 import { moderateContent } from "../clients/openai.js";
+import { hasEmDash } from "./humanize.js";
 
 const SPAM_PHRASES = [
   "check out my",
@@ -65,6 +66,11 @@ export async function safetyFilter(params: {
 
   if (PHONE_PATTERN.test(trimmed)) {
     return { safe: false, reason: "contains_phone" };
+  }
+
+  // Hard rule: never publish em/en dashes (prompt + humanize still leak them)
+  if (hasEmDash(trimmed)) {
+    return { safe: false, reason: "contains_em_dash" };
   }
 
   const lower = trimmed.toLowerCase();

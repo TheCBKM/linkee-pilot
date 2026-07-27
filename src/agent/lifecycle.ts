@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { getPidPath } from "../config/env.js";
 import { setAgentState } from "../db/store.js";
+import { notifyDiscord } from "../notifications/discord.js";
 
 let shuttingDown = false;
 let currentActionPromise: Promise<void> | null = null;
@@ -19,6 +20,12 @@ export function setupLifecycle(onShutdown: () => Promise<void>): void {
     await onShutdown();
     removePidFile();
     setAgentState("status", "stopped");
+    await notifyDiscord({
+      title: "Agent · Stopped",
+      description: `Graceful shutdown after ${signal}.`,
+      severity: "info",
+      fields: [{ name: "Signal", value: signal, inline: true }],
+    });
     process.exit(0);
   };
 

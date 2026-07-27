@@ -3,15 +3,19 @@ import { executeWithRateLimit } from "../rate-limiter/index.js";
 import {
   advanceSequenceStage,
   getPersonForPostTarget,
+  isNurtureTarget,
+  touchConnectionEngaged,
   updateTargetStatus,
   upsertPersonFromPostAuthor,
 } from "../db/store.js";
 import { draftComment } from "../ai/comment-writer.js";
 import type { Target } from "../db/store.js";
+import { resolvePostSocialId } from "../ai/research.js";
 
 export async function commentOnPost(target: Target): Promise<boolean> {
-  const postId = target.social_id ?? target.target_id;
+  const postId = resolvePostSocialId(target) ?? target.social_id ?? target.target_id;
   const content = target.content_preview ?? "";
+  const nurture = isNurtureTarget(target);
 
   const comment = await draftComment({
     postContent: content,
@@ -29,6 +33,14 @@ export async function commentOnPost(target: Target): Promise<boolean> {
 
   if (result.success) {
     updateTargetStatus(target.target_id, "engaged");
+
+    if (nurture) {
+      if (target.author_provider_id) {
+        touchConnectionEngaged(target.author_provider_id);
+      }
+      // Nurture comments must not advance the cold-outreach invite sequence.
+      return true;
+    }
 
     const personId =
       upsertPersonFromPostAuthor({

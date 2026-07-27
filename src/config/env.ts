@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "../../.env") });
 
+const discordWebhookSchema = z
+  .union([z.string().url(), z.literal("")])
+  .optional()
+  .default("");
+
 const fullEnvSchema = z.object({
   UNIPILE_BASE_URL: z.string().url(),
   UNIPILE_API_KEY: z.string().min(1),
@@ -21,6 +26,9 @@ const fullEnvSchema = z.object({
     .string()
     .default("false")
     .transform((v) => v === "true"),
+  DISCORD_WEBHOOK_URL: discordWebhookSchema,
+  /** LinkedIn provider_id for the account owner — never invite / target this profile. */
+  OWN_PROVIDER_ID: z.string().default(""),
 });
 
 const minimalEnvSchema = z.object({
@@ -38,6 +46,8 @@ const minimalEnvSchema = z.object({
     .string()
     .default("false")
     .transform((v) => v === "true"),
+  DISCORD_WEBHOOK_URL: discordWebhookSchema,
+  OWN_PROVIDER_ID: z.string().default(""),
 });
 
 export type Env = z.infer<typeof fullEnvSchema>;

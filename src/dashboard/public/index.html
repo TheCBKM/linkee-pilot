@@ -3,210 +3,375 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LinkedIn Agent Dashboard</title>
+  <title>Dashboard · LinkedIn Profile Enhancer</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <nav class="docs-nav dash-nav">
-    <a href="/" class="docs-nav-brand">LinkedIn Agent</a>
-    <div class="docs-nav-links">
-      <a href="/" class="active">Dashboard</a>
+  <nav class="site-nav" aria-label="Primary">
+    <a href="/" class="site-nav-brand">Profile Enhancer</a>
+    <div class="site-nav-links">
+      <a href="/" class="active" aria-current="page">Dashboard</a>
       <a href="/docs">Docs</a>
     </div>
   </nav>
 
   <header class="header">
     <div>
-      <h1>LinkedIn Agent Dashboard</h1>
-      <p class="subtitle">Read-only view of agent activity & outreach pipeline</p>
+      <p class="eyebrow">Agent dashboard</p>
+      <h1>LinkedIn Profile Enhancer</h1>
+      <p class="subtitle">Read-only view of outreach, nurture, content, and live quotas</p>
     </div>
     <div class="header-meta">
-      <span id="last-updated">Loading…</span>
-      <span id="refresh-indicator" class="refresh-dot"></span>
+      <span id="last-updated" role="status" aria-live="polite">Loading…</span>
+      <span id="refresh-indicator" class="refresh-dot" role="img" aria-label="Refresh status: idle"></span>
+      <button type="button" class="btn" id="refresh-btn">Refresh</button>
     </div>
   </header>
 
-  <div id="halt-banner" class="halt-banner hidden">
-    <strong>Agent halted:</strong> <span id="halt-reason"></span>
+  <nav class="section-nav" aria-label="Dashboard sections">
+    <a href="#agent-health">Health</a>
+    <a href="#outreach">Outreach</a>
+    <a href="#nurture">Nurture</a>
+    <a href="#content">Content</a>
+    <a href="#quality">Quality</a>
+    <a href="#today">Today</a>
+    <a href="#queue">Queue</a>
+    <a href="#activity-log">Activity</a>
+  </nav>
+
+  <div id="error-banner" class="error-banner hidden" role="alert">
+    <div>
+      <strong>Update failed.</strong>
+      <span id="error-banner-text">Could not refresh overview.</span>
+      <span id="stale-banner-text" class="hidden"> Showing last successful data.</span>
+    </div>
+    <button type="button" class="btn btn-primary" id="retry-btn">Retry</button>
   </div>
 
-  <section class="cards" id="status-cards">
-    <div class="card">
-      <div class="card-label">Process</div>
-      <div class="card-value" id="process-status">—</div>
+  <div id="halt-banner" class="halt-banner hidden" role="alert">
+    <div>
+      <strong>Agent halted:</strong> <span id="halt-reason"></span>
     </div>
-    <div class="card">
-      <div class="card-label">Agent Status</div>
-      <div class="card-value" id="agent-status">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Last Heartbeat</div>
-      <div class="card-value" id="last-heartbeat">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Last Action</div>
-      <div class="card-value card-value-sm" id="last-action">—</div>
-    </div>
-  </section>
-
-  <section class="cards outreach-cards" id="outreach-cards">
-    <div class="card card-highlight">
-      <div class="card-label">Ready to Invite</div>
-      <div class="card-value" id="stat-invite-ready">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Invited (total)</div>
-      <div class="card-value" id="stat-invited">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">People in Pipeline</div>
-      <div class="card-value" id="stat-people">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Post Targets</div>
-      <div class="card-value" id="stat-posts">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Reposts Published</div>
-      <div class="card-value" id="stat-reposts">—</div>
-    </div>
-  </section>
-
-  <section class="cards" id="post-health-cards">
-    <div class="card">
-      <div class="card-label">Posts This Week</div>
-      <div class="card-value" id="ph-posts-week">—</div>
-      <div class="card-sub" id="ph-expected">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Originals / Reposts</div>
-      <div class="card-value" id="ph-format-split">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Last Publish</div>
-      <div class="card-value card-value-sm" id="ph-last-publish">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Post Boost</div>
-      <div class="card-value card-value-sm" id="ph-boost">—</div>
-    </div>
-  </section>
-
-  <section class="cards" id="icp-quality-cards">
-    <div class="card">
-      <div class="card-label">ICP Hit Rate (7d)</div>
-      <div class="card-value" id="icp-hit-rate">—</div>
-      <div class="card-sub" id="icp-pass-filter">—</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Outreach Avg Score</div>
-      <div class="card-value" id="icp-avg-score">—</div>
-      <div class="card-sub" id="icp-sample">comments + invites</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Outreach ≥70</div>
-      <div class="card-value" id="icp-pct-70">—</div>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>Outreach Pipeline</h2>
-    <p class="panel-desc">Warm sequence: engage on posts → profile view → connection request</p>
-    <div id="pipeline-funnel" class="pipeline-funnel"></div>
-  </section>
-
-  <section class="panel" id="invite-ready-panel">
-    <h2>Ready to Invite</h2>
-    <p class="panel-desc">People who completed the warm-up sequence</p>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Score</th>
-            <th>Name</th>
-            <th>Headline</th>
-            <th>Source</th>
-          </tr>
-        </thead>
-        <tbody id="invite-ready-body"></tbody>
-      </table>
-    </div>
-    <p id="no-invite-ready" class="empty hidden">No one ready for invite yet — keep engaging</p>
-  </section>
-
-  <div class="grid-2">
-    <section class="panel">
-      <h2>Quota Usage</h2>
-      <div id="quotas" class="quotas"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Actions Today</h2>
-      <div id="actions-today" class="actions-today"></div>
-    </section>
   </div>
 
-  <section class="panel">
-    <h2>Follower Trend</h2>
-    <div class="chart-wrap">
-      <canvas id="follower-chart"></canvas>
-    </div>
-    <p id="no-followers" class="empty hidden">No follower data yet</p>
-  </section>
-
-  <div class="grid-2">
-    <section class="panel">
-      <h2>Targets Queue</h2>
-      <div id="target-counts" class="target-counts"></div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Score</th>
-              <th>Type</th>
-              <th>Stage</th>
-              <th>Author</th>
-              <th>Preview</th>
-              <th>Discovered</th>
-            </tr>
-          </thead>
-          <tbody id="targets-body"></tbody>
-        </table>
+  <div id="main-content">
+    <section class="dash-section" id="agent-health">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Agent health</h2>
+          <p class="section-desc">Process liveness, heartbeat, and active backoffs</p>
+        </div>
+        <a class="doc-link" href="/docs#daemon">Docs →</a>
       </div>
-      <p id="no-targets" class="empty hidden">No pending targets</p>
+
+      <section class="cards" id="status-cards" aria-label="Status cards">
+        <div class="card">
+          <div class="card-label">Process</div>
+          <div class="card-value" id="process-status">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Agent Status</div>
+          <div class="card-value" id="agent-status">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Last Heartbeat</div>
+          <div class="card-value" id="last-heartbeat">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Last Action</div>
+          <div class="card-value card-value-sm" id="last-action">—</div>
+        </div>
+      </section>
+
+      <section class="panel" id="backoff-panel">
+        <h2>Active Backoffs</h2>
+        <div id="backoffs" class="backoffs"></div>
+      </section>
     </section>
 
-    <section class="panel">
-      <h2>Published Posts</h2>
-      <div id="posts-list" class="posts-list"></div>
-      <p id="no-posts" class="empty hidden">No posts yet</p>
+    <section class="dash-section" id="outreach">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Outreach</h2>
+          <p class="section-desc">Warm sequence funnel and people ready for invites</p>
+        </div>
+        <a class="doc-link" href="/docs#pipelines">Docs →</a>
+      </div>
+
+      <section class="cards outreach-cards" id="outreach-cards" aria-label="Outreach stats">
+        <div class="card card-highlight">
+          <div class="card-label">Ready to Invite</div>
+          <div class="card-value" id="stat-invite-ready">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Invited (total)</div>
+          <div class="card-value" id="stat-invited">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">People in Pipeline</div>
+          <div class="card-value" id="stat-people">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Post Targets</div>
+          <div class="card-value" id="stat-posts">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Reposts Published</div>
+          <div class="card-value" id="stat-reposts">—</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Outreach Pipeline</h2>
+        <p class="panel-desc">Warm sequence: engage on posts → profile view → invite → withdrawn / connected</p>
+        <div id="pipeline-funnel" class="pipeline-funnel" aria-hidden="true"></div>
+        <table class="sr-only" id="pipeline-summary">
+          <caption>Outreach pipeline stage counts</caption>
+          <thead>
+            <tr><th scope="col">Stage</th><th scope="col">Count</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="invite-ready-panel">
+        <h2>Ready to Invite</h2>
+        <p class="panel-desc">People who completed the warm-up sequence</p>
+        <p class="panel-meta" id="invite-ready-meta"></p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">People ready to invite</caption>
+            <thead>
+              <tr>
+                <th scope="col">Score</th>
+                <th scope="col">Name</th>
+                <th scope="col">Headline</th>
+                <th scope="col">Source</th>
+              </tr>
+            </thead>
+            <tbody id="invite-ready-body"></tbody>
+          </table>
+        </div>
+        <p id="no-invite-ready" class="empty hidden">No one ready for invite yet — keep engaging</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="nurture">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Network nurture</h2>
+          <p class="section-desc">First-degree sync, accepts, and occasional engagement</p>
+        </div>
+        <a class="doc-link" href="/docs#nurture">Docs →</a>
+      </div>
+
+      <section class="cards outreach-cards" id="nurture-cards" aria-label="Nurture stats">
+        <div class="card">
+          <div class="card-label">Connections Synced</div>
+          <div class="card-value" id="stat-connections">—</div>
+          <div class="card-sub" id="stat-sync-meta">—</div>
+        </div>
+        <div class="card card-highlight">
+          <div class="card-label">Accepts (14d)</div>
+          <div class="card-value" id="stat-accepts-14d">—</div>
+          <div class="card-sub" id="stat-accepts-7d">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Nurture Posts Pending</div>
+          <div class="card-value" id="stat-nurture-pending">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Nurture Likes Today</div>
+          <div class="card-value" id="stat-nurture-likes">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Nurture Comments Today</div>
+          <div class="card-value" id="stat-nurture-comments">—</div>
+        </div>
+      </section>
+
+      <section class="panel" id="nurture-panel">
+        <h2>Recent accepts</h2>
+        <p class="panel-desc">Connections marked accepted from invite correlation (last 10)</p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Recent connection accepts</caption>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Name</th>
+                <th scope="col">Headline</th>
+                <th scope="col">From invite</th>
+              </tr>
+            </thead>
+            <tbody id="recent-accepts-body"></tbody>
+          </table>
+        </div>
+        <p id="no-recent-accepts" class="empty hidden">No accepts recorded yet — sync will detect them</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="content">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Content</h2>
+          <p class="section-desc">Weekly publishing cadence, boost window, and follower trend</p>
+        </div>
+        <a class="doc-link" href="/docs#schedule">Docs →</a>
+      </div>
+
+      <section class="cards" id="post-health-cards" aria-label="Post health">
+        <div class="card">
+          <div class="card-label">Posts This Week</div>
+          <div class="card-value" id="ph-posts-week">—</div>
+          <div class="card-sub" id="ph-expected">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Originals / Reposts</div>
+          <div class="card-value" id="ph-format-split">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Last Publish</div>
+          <div class="card-value card-value-sm" id="ph-last-publish">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Post Boost</div>
+          <div class="card-value card-value-sm" id="ph-boost">—</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Follower Trend</h2>
+        <div class="chart-wrap">
+          <canvas id="follower-chart" role="img" aria-label="Follower count over time"></canvas>
+        </div>
+        <p id="no-followers" class="empty hidden">No follower data yet</p>
+      </section>
+
+      <section class="panel">
+        <h2>Published Posts</h2>
+        <div id="posts-list" class="posts-list"></div>
+        <p id="no-posts" class="empty hidden">No posts yet</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="quality">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">ICP quality</h2>
+          <p class="section-desc">Filter hit rate and outreach relevance scores (7 days)</p>
+        </div>
+        <a class="doc-link" href="/docs#ai">Docs →</a>
+      </div>
+
+      <section class="cards" id="icp-quality-cards" aria-label="ICP quality">
+        <div class="card">
+          <div class="card-label">ICP Hit Rate (7d)</div>
+          <div class="card-value" id="icp-hit-rate">—</div>
+          <div class="card-sub" id="icp-pass-filter">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Outreach Avg Score</div>
+          <div class="card-value" id="icp-avg-score">—</div>
+          <div class="card-sub" id="icp-sample">comments + invites</div>
+        </div>
+        <div class="card">
+          <div class="card-label" id="icp-threshold-label">Outreach ≥75</div>
+          <div class="card-value" id="icp-pct-70">—</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="dash-section" id="today">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Today</h2>
+          <p class="section-desc">Effective daily quotas and actions logged today</p>
+        </div>
+        <a class="doc-link" href="/docs#rate-limits">Docs →</a>
+      </div>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h2>Quota Usage</h2>
+          <div id="quotas" class="quotas"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Actions Today</h2>
+          <div id="actions-today" class="actions-today"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="dash-section" id="queue">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Targets queue</h2>
+          <p class="section-desc">Highest-scoring pending discoveries waiting for engagement</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Targets Queue</h2>
+        <div id="target-counts" class="target-counts"></div>
+        <p class="panel-meta" id="targets-meta"></p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Pending targets queue</caption>
+            <thead>
+              <tr>
+                <th scope="col">Score</th>
+                <th scope="col">Type</th>
+                <th scope="col">Stage</th>
+                <th scope="col">Author</th>
+                <th scope="col">Preview</th>
+                <th scope="col">Discovered</th>
+              </tr>
+            </thead>
+            <tbody id="targets-body"></tbody>
+          </table>
+        </div>
+        <p id="no-targets" class="empty hidden">No pending targets</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="activity-log">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Activity log</h2>
+          <p class="section-desc">Most recent actions with result and error type</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Recent Actions</h2>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Recent agent actions</caption>
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Type</th>
+                <th scope="col">Result</th>
+                <th scope="col">Error</th>
+                <th scope="col">Target</th>
+                <th scope="col">Content</th>
+              </tr>
+            </thead>
+            <tbody id="actions-body"></tbody>
+          </table>
+        </div>
+        <p id="no-actions" class="empty hidden">No actions logged yet</p>
+      </section>
     </section>
   </div>
 
-  <section class="panel" id="backoff-panel">
-    <h2>Active Backoffs</h2>
-    <div id="backoffs" class="backoffs"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Recent Actions</h2>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Type</th>
-            <th>Result</th>
-            <th>Target</th>
-            <th>Content</th>
-          </tr>
-        </thead>
-        <tbody id="actions-body"></tbody>
-      </table>
-    </div>
-    <p id="no-actions" class="empty hidden">No actions logged yet</p>
-  </section>
+  <footer class="dash-footer">
+    <p>LinkedIn Profile Enhancer · read-only SQLite view · auto-refresh every 15s</p>
+    <a href="/docs">Architecture docs</a>
+  </footer>
 
   <script src="/app.js"></script>
 </body>

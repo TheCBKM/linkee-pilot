@@ -1,12 +1,18 @@
 const REFRESH_MS = 15_000;
 
 let followerChart = null;
+let lastSuccessAt = null;
+let refreshTimer = null;
+let hasLoadedOnce = false;
 
 const ACTION_LABELS = {
   like_post: "Like post",
   like_comment: "Like comment",
   comment_post: "Comment",
+  reply_comment: "Reply (own post)",
   send_invite: "Invite",
+  withdraw_invite: "Withdraw invite",
+  sync_connections: "Sync connections",
   view_profile: "Profile view",
   create_post: "Publish post",
   search: "Research",
@@ -20,15 +26,19 @@ const STAGE_LABELS = {
   viewed: "Viewed",
   invite_ready: "Invite ready",
   invited: "Invited",
+  withdrawn: "Withdrawn",
+  connected: "Connected",
 };
 
 const QUOTA_ORDER = [
   "search",
   "like_post",
   "comment_post",
+  "reply_comment",
   "like_comment",
   "view_profile",
   "send_invite",
+  "withdraw_invite",
   "create_post",
   "profile_audit",
 ];
@@ -78,20 +88,63 @@ function stageClass(stage) {
   return `stage-${stage.replace(/_/g, "-")}`;
 }
 
+function setRefreshIndicator(state) {
+  const indicator = document.getElementById("refresh-indicator");
+  indicator.classList.remove("loading", "stale");
+  if (state === "loading") indicator.classList.add("loading");
+  if (state === "stale") indicator.classList.add("stale");
+  indicator.setAttribute(
+    "aria-label",
+    state === "loading"
+      ? "Refresh status: updating"
+      : state === "stale"
+        ? "Refresh status: stale"
+        : "Refresh status: idle"
+  );
+}
+
+function showError(message, isStale) {
+  const banner = document.getElementById("error-banner");
+  const staleText = document.getElementById("stale-banner-text");
+  const main = document.getElementById("main-content");
+  banner.classList.remove("hidden");
+  document.getElementById("error-banner-text").textContent = message;
+  if (isStale) {
+    staleText.classList.remove("hidden");
+    main.classList.add("main-stale");
+  } else {
+    staleText.classList.add("hidden");
+    main.classList.remove("main-stale");
+  }
+  setRefreshIndicator("stale");
+}
+
+function clearError() {
+  document.getElementById("error-banner").classList.add("hidden");
+  document.getElementById("stale-banner-text").classList.add("hidden");
+  document.getElementById("main-content").classList.remove("main-stale");
+}
+
 function renderStatusCards(data) {
   const { process, agent } = data;
 
   const processEl = document.getElementById("process-status");
   if (process.running) {
-    processEl.textContent = `Running (PID ${process.pid})`;
+    processEl.innerHTML = `<span class="status-pill is-running">Running</span> <span class="card-sub">PID ${process.pid}</span>`;
     processEl.className = "card-value status-running";
   } else {
-    processEl.textContent = "Stopped";
+    processEl.innerHTML = `<span class="status-pill is-stopped">Stopped</span>`;
     processEl.className = "card-value status-stopped";
   }
 
   const statusEl = document.getElementById("agent-status");
-  statusEl.textContent = agent.status ?? "unknown";
+  const status = agent.status ?? "unknown";
+  let pillClass = "status-pill";
+  if (agent.halted) pillClass += " is-halted";
+  else if (status === "paused") pillClass += " is-paused";
+  else if (process.running) pillClass += " is-running";
+  else pillClass += " is-stopped";
+  statusEl.innerHTML = `<span class="${pillClass}">${escapeHtml(status)}</span>`;
   statusEl.className = "card-value" + (agent.halted ? " status-halted" : "");
 
   document.getElementById("last-heartbeat").textContent = relativeTime(agent.lastHeartbeat);
@@ -115,6 +168,62 @@ function renderOutreachStats(outreach) {
   document.getElementById("stat-people").textContent = String(outreach.peopleTotal);
   document.getElementById("stat-posts").textContent = String(outreach.postTargets);
   document.getElementById("stat-reposts").textContent = String(outreach.repostsPublished);
+}
+
+function renderNurtureStats(nurture) {
+  if (!nurture) return;
+  document.getElementById("stat-connections").textContent = String(nurture.connectionsTotal ?? 0);
+  document.getElementById("stat-accepts-14d").textContent = String(nurture.accepted14d ?? 0);
+  document.getElementById("stat-accepts-7d").textContent =
+    `${nurture.accepted7d ?? 0} in last 7d · ${nurture.fromInvite ?? 0} from our invites`;
+  document.getElementById("stat-nurture-pending").textContent = String(
+    nurture.pendingNurturePosts ?? 0
+  );
+  document.getElementById("stat-nurture-likes").textContent = String(nurture.likesToday ?? 0);
+  document.getElementById("stat-nurture-comments").textContent = String(
+    nurture.commentsToday ?? 0
+  );
+
+  const syncMeta = document.getElementById("stat-sync-meta");
+  const syncsToday = nurture.syncsToday ?? 0;
+  const syncMax = nurture.syncMaxPerDay ?? 3;
+  const backfill = nurture.backfillDone ? "backfill done" : "backfill pending";
+  let nextLabel = "next unset";
+  if (nurture.nextSyncAt) {
+    const ts = Date.parse(nurture.nextSyncAt);
+    if (!Number.isNaN(ts)) {
+      if (ts <= Date.now()) {
+        nextLabel = "next due now";
+      } else {
+        const mins = Math.round((ts - Date.now()) / 60000);
+        nextLabel = mins >= 60 ? `next in ${Math.round(mins / 60)}h` : `next in ${Math.max(1, mins)}m`;
+      }
+    }
+  }
+  syncMeta.textContent = `${backfill} · ${syncsToday}/${syncMax} syncs today · ${nextLabel}`;
+}
+
+function renderRecentAccepts(accepts) {
+  const tbody = document.getElementById("recent-accepts-body");
+  const noData = document.getElementById("no-recent-accepts");
+
+  if (!accepts || accepts.length === 0) {
+    tbody.innerHTML = "";
+    noData.classList.remove("hidden");
+    return;
+  }
+
+  noData.classList.add("hidden");
+  tbody.innerHTML = accepts
+    .map((a) => `
+      <tr>
+        <td class="mono">${relativeTime(a.accepted_at)}</td>
+        <td>${escapeHtml(truncate(a.full_name ?? a.provider_id ?? "—", 28))}</td>
+        <td class="preview" title="${escapeHtml(a.headline ?? "")}">${escapeHtml(truncate(a.headline, 45))}</td>
+        <td>${a.from_invite ? "yes" : "no"}</td>
+      </tr>
+    `)
+    .join("");
 }
 
 function renderPostHealth(ph) {
@@ -141,6 +250,8 @@ function renderPostHealth(ph) {
 
 function renderIcpQuality(icp) {
   if (!icp) return;
+  const threshold = icp.minRelevanceThreshold ?? 75;
+  document.getElementById("icp-threshold-label").textContent = `Outreach ≥${threshold}`;
   document.getElementById("icp-hit-rate").textContent =
     icp.hitRatePct == null ? "—" : `${icp.hitRatePct}%`;
   document.getElementById("icp-pass-filter").textContent =
@@ -157,9 +268,14 @@ function renderIcpQuality(icp) {
 
 function renderPipelineFunnel(sequenceStages) {
   const container = document.getElementById("pipeline-funnel");
+  const summaryBody = document.querySelector("#pipeline-summary tbody");
   const stages = sequenceStages ?? {};
   const entries = Object.entries(stages);
   const max = Math.max(1, ...entries.map(([, n]) => n));
+
+  summaryBody.innerHTML = entries
+    .map(([stage, count]) => `<tr><td>${escapeHtml(labelStage(stage))}</td><td>${count}</td></tr>`)
+    .join("");
 
   if (entries.every(([, n]) => n === 0)) {
     container.innerHTML = '<p class="empty">No people in pipeline yet — research will populate targets</p>';
@@ -182,10 +298,15 @@ function renderPipelineFunnel(sequenceStages) {
     .join("");
 }
 
-function renderInviteReady(people) {
+function renderInviteReady(people, total) {
   const tbody = document.getElementById("invite-ready-body");
   const noData = document.getElementById("no-invite-ready");
   const panel = document.getElementById("invite-ready-panel");
+  const meta = document.getElementById("invite-ready-meta");
+
+  const shown = people?.length ?? 0;
+  const totalCount = total ?? shown;
+  meta.textContent = totalCount > 0 ? `Showing ${shown} of ${totalCount}` : "";
 
   if (!people || people.length === 0) {
     tbody.innerHTML = "";
@@ -228,7 +349,7 @@ function renderQuotas(quotas) {
     row.className = "quota-row";
     row.innerHTML = `
       <span class="quota-label" title="${type}">${labelAction(type)}</span>
-      <div class="quota-bar-bg">
+      <div class="quota-bar-bg" role="progressbar" aria-valuemin="0" aria-valuemax="${cap}" aria-valuenow="${used}" aria-label="${labelAction(type)} quota">
         <div class="quota-bar-fill ${barClass}" style="width: ${pct}%"></div>
       </div>
       <span class="quota-count">${used}/${cap}</span>
@@ -261,9 +382,10 @@ function renderFollowerChart(history) {
   const canvas = document.getElementById("follower-chart");
   const noData = document.getElementById("no-followers");
 
-  if (history.length === 0) {
+  if (!history || history.length === 0) {
     canvas.classList.add("hidden");
     noData.classList.remove("hidden");
+    canvas.setAttribute("aria-label", "Follower count over time: no data");
     if (followerChart) {
       followerChart.destroy();
       followerChart = null;
@@ -276,6 +398,14 @@ function renderFollowerChart(history) {
 
   const labels = history.map((h) => h.recorded_at.slice(0, 10));
   const counts = history.map((h) => h.count);
+  const latest = counts[counts.length - 1];
+  const first = counts[0];
+  const delta = latest - first;
+  const trend = delta === 0 ? "flat" : delta > 0 ? `up ${delta}` : `down ${Math.abs(delta)}`;
+  canvas.setAttribute(
+    "aria-label",
+    `Follower count over time. Latest ${latest}, trend ${trend} across ${counts.length} points.`
+  );
 
   if (followerChart) {
     followerChart.data.labels = labels;
@@ -292,7 +422,7 @@ function renderFollowerChart(history) {
         label: "Followers",
         data: counts,
         borderColor: "#0a66c2",
-        backgroundColor: "rgba(10, 102, 194, 0.1)",
+        backgroundColor: "rgba(10, 102, 194, 0.12)",
         fill: true,
         tension: 0.3,
         pointRadius: 3,
@@ -304,26 +434,31 @@ function renderFollowerChart(history) {
       plugins: { legend: { display: false } },
       scales: {
         x: {
-          ticks: { color: "#8b90a0", maxTicksLimit: 8 },
-          grid: { color: "#2a2e3d" },
+          ticks: { color: "#5b6775", maxTicksLimit: 8 },
+          grid: { color: "#e4ebf3" },
         },
         y: {
-          ticks: { color: "#8b90a0" },
-          grid: { color: "#2a2e3d" },
+          ticks: { color: "#5b6775" },
+          grid: { color: "#e4ebf3" },
         },
       },
     },
   });
 }
 
-function renderTargets(targets) {
+function renderTargets(targets, pendingTotal) {
   const countsEl = document.getElementById("target-counts");
   const tbody = document.getElementById("targets-body");
   const noTargets = document.getElementById("no-targets");
+  const meta = document.getElementById("targets-meta");
 
   countsEl.innerHTML = Object.entries(targets.counts ?? {})
     .map(([status, count]) => `<span class="count-badge">${status}: <strong>${count}</strong></span>`)
     .join("");
+
+  const shown = targets.pending?.length ?? 0;
+  const total = pendingTotal ?? shown;
+  meta.textContent = total > 0 ? `Showing ${shown} of ${total} pending` : "";
 
   if (!targets.pending || targets.pending.length === 0) {
     tbody.innerHTML = "";
@@ -396,6 +531,10 @@ function renderBackoffs(backoffs) {
     .join("");
 }
 
+function resultBadge(result) {
+  return `<span class="result-badge result-${escapeHtml(result)}">${escapeHtml(result)}</span>`;
+}
+
 function renderRecentActions(actions) {
   const tbody = document.getElementById("actions-body");
   const noActions = document.getElementById("no-actions");
@@ -412,7 +551,8 @@ function renderRecentActions(actions) {
       <tr>
         <td class="mono">${relativeTime(a.created_at)}</td>
         <td class="mono">${labelAction(a.action_type)}</td>
-        <td class="result-${a.result}">${a.result}</td>
+        <td>${resultBadge(a.result)}</td>
+        <td class="mono">${a.result === "failed" ? escapeHtml(a.error_type ?? "—") : "—"}</td>
         <td class="mono preview" title="${escapeHtml(a.target_id)}">${escapeHtml(truncate(a.target_id, 24))}</td>
         <td class="preview" title="${escapeHtml(a.content ?? "")}">${escapeHtml(truncate(a.content, 60))}</td>
       </tr>
@@ -423,37 +563,95 @@ function renderRecentActions(actions) {
 function render(data) {
   renderStatusCards(data);
   renderOutreachStats(data.outreach);
+  renderNurtureStats(data.nurture);
+  renderRecentAccepts(data.nurture?.recentAccepts);
   renderPostHealth(data.postHealth);
   renderIcpQuality(data.icpQuality);
   renderPipelineFunnel(data.targets?.sequenceStages);
-  renderInviteReady(data.inviteReadyPeople);
+  renderInviteReady(data.inviteReadyPeople, data.inviteReadyTotal);
   renderQuotas(data.quotas);
   renderActionsToday(data.actionsToday);
   renderFollowerChart(data.followerHistory);
-  renderTargets(data.targets);
+  renderTargets(data.targets, data.pendingTargetsTotal);
   renderPosts(data.posts);
   renderBackoffs(data.backoffs);
   renderRecentActions(data.recentActions);
 }
 
 async function fetchOverview() {
-  const indicator = document.getElementById("refresh-indicator");
-  indicator.classList.add("loading");
+  setRefreshIndicator("loading");
 
   try {
     const res = await fetch("/api/overview");
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     render(data);
+    hasLoadedOnce = true;
+    lastSuccessAt = new Date();
+    clearError();
+    setRefreshIndicator("idle");
     document.getElementById("last-updated").textContent =
-      `Updated ${new Date().toLocaleTimeString()}`;
+      `Updated ${lastSuccessAt.toLocaleTimeString()}`;
   } catch (err) {
-    document.getElementById("last-updated").textContent =
-      `Error: ${err.message}`;
-  } finally {
-    indicator.classList.remove("loading");
+    const msg = err.message || "Unknown error";
+    if (hasLoadedOnce && lastSuccessAt) {
+      showError(msg, true);
+      document.getElementById("last-updated").textContent =
+        `Update failed · last success ${lastSuccessAt.toLocaleTimeString()}`;
+    } else {
+      showError(msg, false);
+      document.getElementById("last-updated").textContent = `Error: ${msg}`;
+      setRefreshIndicator("stale");
+    }
   }
 }
 
+function startPolling() {
+  stopPolling();
+  refreshTimer = setInterval(() => {
+    if (!document.hidden) fetchOverview();
+  }, REFRESH_MS);
+}
+
+function stopPolling() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function setupSectionNav() {
+  const links = Array.from(document.querySelectorAll(".section-nav a"));
+  const sections = links
+    .map((link) => document.querySelector(link.getAttribute("href")))
+    .filter(Boolean);
+
+  if (!("IntersectionObserver" in window) || sections.length === 0) return;
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      const id = `#${visible.target.id}`;
+      links.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("href") === id);
+      });
+    },
+    { rootMargin: "-20% 0px -60% 0px", threshold: [0.1, 0.4, 0.7] }
+  );
+
+  sections.forEach((section) => observer.observe(section));
+}
+
+document.getElementById("refresh-btn").addEventListener("click", () => fetchOverview());
+document.getElementById("retry-btn").addEventListener("click", () => fetchOverview());
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) fetchOverview();
+});
+
+setupSectionNav();
 fetchOverview();
-setInterval(fetchOverview, REFRESH_MS);
+startPolling();

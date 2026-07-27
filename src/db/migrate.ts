@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { getDataDir, getDbPath } from "../config/env.js";
+import { getDataDir, getDbPath, getEnv } from "../config/env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +55,29 @@ export function runMigrations(database: Database.Database): void {
     );
   }
 
+  // Ensure connections table exists on DBs created before nurture support.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS connections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id TEXT NOT NULL UNIQUE,
+      public_identifier TEXT,
+      full_name TEXT,
+      headline TEXT,
+      profile_url TEXT,
+      connected_at TEXT,
+      first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      from_invite INTEGER NOT NULL DEFAULT 0,
+      accepted_at TEXT,
+      last_engaged_at TEXT,
+      metadata TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_connections_accepted
+      ON connections(accepted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_connections_engaged
+      ON connections(last_engaged_at);
+  `);
+
   // One-shot: drop pending India / South Asia targets already in the pool.
   database
     .prepare(
@@ -80,6 +103,36 @@ export function runMigrations(database: Database.Database): void {
          )`
     )
     .run();
+
+  // Filter the account owner's own LinkedIn profile out of the outreach pool.
+  const ownProviderId = getEnv().OWN_PROVIDER_ID?.trim();
+  if (ownProviderId) {
+    database
+      .prepare(
+        `UPDATE targets
+         SET status = 'filtered',
+             relevance_score = 0,
+             metadata = json_set(
+               COALESCE(metadata, '{}'),
+               '$.icp_reject_reason',
+               'own profile (self)'
+             )
+         WHERE status = 'pending'
+           AND target_type = 'person'
+           AND (
+             provider_id = ?
+             OR target_id = ?
+             OR target_id = ?
+             OR COALESCE(json_extract(metadata, '$.resolved_provider_id'), '') = ?
+           )`
+      )
+      .run(
+        ownProviderId,
+        ownProviderId,
+        `person:${ownProviderId}`,
+        ownProviderId
+      );
+  }
 }
 
 export function ensureDbSchema(): void {

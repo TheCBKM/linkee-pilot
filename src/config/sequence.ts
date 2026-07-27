@@ -5,6 +5,8 @@ export const SEQUENCE_STAGES = [
   "viewed",
   "invite_ready",
   "invited",
+  "withdrawn",
+  "connected",
 ] as const;
 
 export type SequenceStage = (typeof SEQUENCE_STAGES)[number];
@@ -16,6 +18,8 @@ const STAGE_ORDER: Record<SequenceStage, number> = {
   viewed: 3,
   invite_ready: 4,
   invited: 5,
+  withdrawn: 6,
+  connected: 7,
 };
 
 export function stageRank(stage: string | null | undefined): number {
@@ -37,7 +41,7 @@ export function maxStage(
   return stageRank(a) >= stageRank(b) ? a : b;
 }
 
-export type PersonSource = "post" | "search";
+export type PersonSource = "post" | "search" | "comment";
 
 export type PersonTouch = "liked" | "commented" | "viewed";
 
@@ -48,11 +52,14 @@ export function checkInviteReady(params: {
 }): boolean {
   const stage = params.sequenceStage ?? "discovered";
   if (stage === "invite_ready") return true;
-  if (stage === "invited") return false;
+  if (stage === "invited" || stage === "withdrawn" || stage === "connected") {
+    return false;
+  }
 
   const touches = params.touches ?? {};
 
-  if (params.source === "search") {
+  // Search and own-post commenters are warm: profile view is enough.
+  if (params.source === "search" || params.source === "comment") {
     return touches.viewed === true || isStageAtLeast(stage, "viewed");
   }
 

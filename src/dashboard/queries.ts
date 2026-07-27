@@ -12,6 +12,12 @@ import {
   LAST_PUBLISHED_POST_ID_KEY,
   POST_BOOST_UNTIL_KEY,
 } from "../actions/create-post.js";
+import {
+  CONNECTIONS_BACKFILL_DONE_KEY,
+  CONNECTIONS_NEXT_SYNC_AT_KEY,
+  CONNECTIONS_SYNC_COUNT_DATE_KEY,
+  CONNECTIONS_SYNC_COUNT_KEY,
+} from "../actions/sync-connections.js";
 
 let db: Database.Database | null = null;
 
@@ -58,7 +64,9 @@ function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
     "like_post",
     "like_comment",
     "comment_post",
+    "reply_comment",
     "send_invite",
+    "withdraw_invite",
     "create_post",
     "search",
     "profile_audit",
@@ -214,6 +222,7 @@ function getIcpQuality(database: Database.Database): DashboardOverview["icpQuali
     outreachAvgScore: avgScore,
     outreachPctAbove70: pctAboveThreshold,
     outreachSampleSize: outreachScores.length,
+    minRelevanceThreshold: LIMITS.minRelevanceScore,
   };
 }
 
@@ -276,6 +285,26 @@ export interface DashboardOverview {
     postTargets: number;
     repostsPublished: number;
   };
+  nurture: {
+    connectionsTotal: number;
+    fromInvite: number;
+    accepted7d: number;
+    accepted14d: number;
+    pendingNurturePosts: number;
+    likesToday: number;
+    commentsToday: number;
+    backfillDone: boolean;
+    nextSyncAt: string | null;
+    syncsToday: number;
+    syncMaxPerDay: number;
+    recentAccepts: {
+      provider_id: string;
+      full_name: string | null;
+      headline: string | null;
+      accepted_at: string | null;
+      from_invite: number;
+    }[];
+  };
   inviteReadyPeople: {
     target_id: string;
     author_name: string | null;
@@ -284,6 +313,8 @@ export interface DashboardOverview {
     relevance_score: number;
     sequence_stage: string | null;
   }[];
+  inviteReadyTotal: number;
+  pendingTargetsTotal: number;
   postHealth: {
     postsThisWeek: number;
     originalsThisWeek: number;
@@ -303,6 +334,7 @@ export interface DashboardOverview {
     outreachAvgScore: number | null;
     outreachPctAbove70: number | null;
     outreachSampleSize: number;
+    minRelevanceThreshold: number;
   };
 }
 
@@ -313,6 +345,8 @@ const SEQUENCE_ORDER = [
   "viewed",
   "invite_ready",
   "invited",
+  "withdrawn",
+  "connected",
 ] as const;
 
 export function getDashboardOverview(): DashboardOverview {
@@ -414,6 +448,106 @@ export function getDashboardOverview(): DashboardOverview {
     )
     .all() as DashboardOverview["inviteReadyPeople"];
 
+  let connectionsTotal = 0;
+  let fromInvite = 0;
+  let accepted7d = 0;
+  let accepted14d = 0;
+  let recentAccepts: DashboardOverview["nurture"]["recentAccepts"] = [];
+  try {
+    connectionsTotal = (
+      database.prepare("SELECT COUNT(*) as c FROM connections").get() as {
+        c: number;
+      }
+    ).c;
+    fromInvite = (
+      database
+        .prepare("SELECT COUNT(*) as c FROM connections WHERE from_invite = 1")
+        .get() as { c: number }
+    ).c;
+    accepted7d = (
+      database
+        .prepare(
+          `SELECT COUNT(*) as c FROM connections
+           WHERE accepted_at IS NOT NULL
+             AND accepted_at >= datetime('now', '-7 days')`
+        )
+        .get() as { c: number }
+    ).c;
+    accepted14d = (
+      database
+        .prepare(
+          `SELECT COUNT(*) as c FROM connections
+           WHERE accepted_at IS NOT NULL
+             AND accepted_at >= datetime('now', '-14 days')`
+        )
+        .get() as { c: number }
+    ).c;
+    recentAccepts = database
+      .prepare(
+        `SELECT provider_id, full_name, headline, accepted_at, from_invite
+         FROM connections
+         WHERE accepted_at IS NOT NULL
+         ORDER BY accepted_at DESC
+         LIMIT 10`
+      )
+      .all() as DashboardOverview["nurture"]["recentAccepts"];
+  } catch {
+    // connections table may not exist yet on very old DBs mid-migration
+  }
+
+  const pendingTargetsTotal = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM targets WHERE status = 'pending'`
+      )
+      .get() as { c: number }
+  ).c;
+
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const syncCountDate = getAgentState(CONNECTIONS_SYNC_COUNT_DATE_KEY);
+  const syncCountRaw = getAgentState(CONNECTIONS_SYNC_COUNT_KEY);
+  const syncsToday =
+    syncCountDate === todayUtc && syncCountRaw
+      ? Number.parseInt(syncCountRaw, 10) || 0
+      : 0;
+
+  const pendingNurturePosts = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM targets
+         WHERE target_type = 'post'
+           AND status = 'pending'
+           AND json_extract(metadata, '$.nurture') = 1`
+      )
+      .get() as { c: number }
+  ).c;
+
+  const nurtureLikesToday = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM actions a
+         JOIN targets t ON t.target_id = a.target_id OR t.social_id = a.target_id
+         WHERE a.action_type = 'like_post'
+           AND a.result IN ('success', 'dry_run')
+           AND date(a.created_at) = ?
+           AND json_extract(t.metadata, '$.nurture') = 1`
+      )
+      .get(today) as { c: number }
+  ).c;
+
+  const nurtureCommentsToday = (
+    database
+      .prepare(
+        `SELECT COUNT(*) as c FROM actions a
+         JOIN targets t ON t.target_id = a.target_id OR t.social_id = a.target_id
+         WHERE a.action_type = 'comment_post'
+           AND a.result IN ('success', 'dry_run')
+           AND date(a.created_at) = ?
+           AND json_extract(t.metadata, '$.nurture') = 1`
+      )
+      .get(today) as { c: number }
+  ).c;
+
   const stageCounts = Object.fromEntries(
     sequenceStages.map((r) => [r.sequence_stage ?? "discovered", r.count])
   );
@@ -454,7 +588,23 @@ export function getDashboardOverview(): DashboardOverview {
       postTargets: postTargetsRow.count,
       repostsPublished: repostsRow.count,
     },
+    nurture: {
+      connectionsTotal,
+      fromInvite,
+      accepted7d,
+      accepted14d,
+      pendingNurturePosts,
+      likesToday: nurtureLikesToday,
+      commentsToday: nurtureCommentsToday,
+      backfillDone: getAgentState(CONNECTIONS_BACKFILL_DONE_KEY) === "true",
+      nextSyncAt: getAgentState(CONNECTIONS_NEXT_SYNC_AT_KEY),
+      syncsToday,
+      syncMaxPerDay: LIMITS.nurture.syncMaxPerDay,
+      recentAccepts,
+    },
     inviteReadyPeople,
+    inviteReadyTotal: inviteReadyRow.count,
+    pendingTargetsTotal,
     postHealth: getPostHealth(database),
     icpQuality: getIcpQuality(database),
   };
