@@ -41,19 +41,22 @@ async function draftTextPost(recentTrends?: string): Promise<PostDraft | null> {
     : `- Anchor the post in this pillar: ${pillar}`;
 
   const system = systemPromptWithBrand(
-    `Write a LinkedIn thought-leadership post built for early engagement. Rules:
+    `Write a LinkedIn thought-leadership post built for credibility and useful discussion. Rules:
 - Hook first: open with a specific observation, number, failure, or contrarian claim in the first 1-2 lines
-- Structure: hook → one concrete story/detail → takeaway → soft ask
+- Choose ONE structure and vary it across drafts: technical teardown, before/after workflow, contrarian opinion, build-in-public update, failure analysis, or concise field note
 - 80-180 words (tight beats long essays)
 - ${trendRule}
 - No links, no hashtag spam, no self-promotion
 - Do not mention Scrummer by name or include a product CTA
-- Soft engagement closer: end with one sharp question or "curious how you handle X". Never a generic "thoughts?" / "agree?" CTA
+- A closing question is optional. Never use a generic "thoughts?", "agree?", or repeated "curious how you handle X" CTA
 - NEVER use em dashes (—), en dashes (–), or double-hyphen dashes (--). Use commas, periods, or a single hyphen.
 - Share a CTO/builder perspective:
   - Write like a busy CTO sharing a real observation, not a content marketer
   - Short paragraphs with line breaks; avoid bullet lists and numbered lists
-  - Include one specific, concrete detail (a scenario, mistake, or small win from building)
+  - Include one specific, concrete detail only when it is supplied by research or the selected pillar
+  - Never invent customer stories, team experiments, dates, metrics, quotes, or phrases such as "last quarter we tried"
+  - If no verified story is available, frame the post as an engineering principle, design tradeoff, or open technical question
+  - Explain mechanism, not just symptoms: show why a workflow or system fails and what design choice improves it
   - Vary rhythm: mix short punchy lines with longer ones
   - Contractions and first person are fine when natural
   - No buzzword soup (leverage, delve, landscape, unlock, game-changer, paradigm, robust)

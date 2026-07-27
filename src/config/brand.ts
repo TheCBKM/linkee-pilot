@@ -30,20 +30,21 @@ export const BRAND = {
     "Remote/distributed engineering team leads in Western markets",
   ],
   contentPillars: [
-    "Context loss in distributed engineering teams",
-    "Meeting overhead vs execution: what actually ships",
-    "Building AI agents that sync meetings to Jira",
-    "Lessons from shipping Scrummer",
+    "Production AI agent reliability: durable state, idempotency, observability, guardrails, and human escalation",
+    "Engineering context and delivery intelligence across meetings, Slack, Jira, and source repositories",
+    "Building Scrummer transparently: product decisions, technical tradeoffs, experiments, failures, and lessons",
   ],
   searchKeywords: [
-    "engineering manager",
-    "sprint planning",
+    "AI agents",
+    "production AI",
+    "engineering intelligence",
+    "software architecture",
+    "distributed systems",
     "Jira automation",
-    "daily standup",
     "engineering productivity",
-    "remote engineering team",
-    "agile teams",
-    "meeting notes",
+    "workflow automation",
+    "distributed engineering teams",
+    "blocker detection",
   ],
 } as const;
 
@@ -58,4 +59,3 @@ Target audience: ${BRAND.icpTargets.join(", ")}
 Content pillars: ${BRAND.contentPillars.join("; ")}
 `.trim();
 }
-
