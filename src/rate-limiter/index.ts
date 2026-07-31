@@ -7,8 +7,13 @@ import {
   pickReactionType,
   randomBetween,
 } from "./human-delay.js";
-import { handleApiError } from "./backoff.js";
-import { logAction, markPersonConnected } from "../db/store.js";
+import { handleApiError, SOFT_SKIP_MAX_TRIES } from "./backoff.js";
+import {
+  countFailedActions,
+  logAction,
+  markPersonConnected,
+  markTargetSkipped,
+} from "../db/store.js";
 import { getEnv } from "../config/env.js";
 import { notifyDiscord } from "../notifications/discord.js";
 import { hasEmDash } from "../ai/humanize.js";
@@ -60,6 +65,30 @@ export async function executeWithRateLimit<T>(params: {
     return { success: true };
   }
 
+  // Already exhausted soft-skip budget (e.g. deleted posts) — don't call the API again.
+  for (const [errorType, maxTries] of Object.entries(SOFT_SKIP_MAX_TRIES)) {
+    const failures = countFailedActions(
+      params.actionType,
+      params.targetId,
+      errorType
+    );
+    if (failures >= maxTries) {
+      const changed = markTargetSkipped(params.targetId);
+      console.warn(
+        `[rate-limiter] Pre-skip ${params.actionType} target after ${failures}× ${errorType}` +
+          ` (${params.targetId.slice(0, 80)}${changed ? "" : "; no pending target matched"})`
+      );
+      logAction({
+        actionType: params.actionType,
+        targetId: params.targetId,
+        content: params.content,
+        result: "skipped",
+        errorType,
+      });
+      return { success: false, skipped: true };
+    }
+  }
+
   try {
     const result = await params.execute();
     logAction({
@@ -97,6 +126,31 @@ export async function executeWithRateLimit<T>(params: {
       markPersonConnected(params.targetId, new Date().toISOString());
     }
 
+    // Soft-skip: after N failures of the same error (e.g. deleted posts),
+    // mark the target skipped so we stop retrying it forever.
+    const softSkipMax = SOFT_SKIP_MAX_TRIES[errorType];
+    if (softSkipMax != null) {
+      const failures = countFailedActions(
+        params.actionType,
+        params.targetId,
+        errorType
+      );
+      if (failures >= softSkipMax) {
+        const changed = markTargetSkipped(params.targetId);
+        console.warn(
+          `[rate-limiter] Skipping target after ${failures}× ${errorType}` +
+            ` (${params.actionType} ${params.targetId.slice(0, 80)}` +
+            `${changed ? "" : "; no pending target matched"})`
+        );
+        return { success: false, skipped: true };
+      }
+      // First failure(s): brief pause, keep target pending for one more try.
+      if (backoff.sleepMs > 0) {
+        await sleep(backoff.sleepMs);
+      }
+      return { success: false, skipped: true };
+    }
+
     if (!backoff.skipTarget && !backoff.haltAgent && !backoff.discordNotified) {
       notifyDiscord({
         title: "Action · Failed",
@@ -115,6 +169,7 @@ export async function executeWithRateLimit<T>(params: {
     }
 
     if (backoff.skipTarget) {
+      markTargetSkipped(params.targetId);
       return { success: false, skipped: true };
     }
 

@@ -183,6 +183,38 @@ export function hasCompletedAction(
   return !!row;
 }
 
+/** Count failed attempts for an action+target with a specific error type. */
+export function countFailedActions(
+  actionType: ActionType,
+  targetId: string,
+  errorType: string
+): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) as count FROM actions
+       WHERE action_type = ? AND target_id = ?
+         AND result = 'failed' AND error_type = ?`
+    )
+    .get(actionType, targetId, errorType) as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
+/**
+ * Mark a pending target as skipped so it is not selected again.
+ * Matches by target_id, social_id, or provider_id (action logs may use any of these).
+ */
+export function markTargetSkipped(actionTargetId: string): number {
+  const result = getDb()
+    .prepare(
+      `UPDATE targets
+       SET status = 'skipped', last_engaged_at = datetime('now')
+       WHERE status = 'pending'
+         AND (target_id = ? OR social_id = ? OR provider_id = ?)`
+    )
+    .run(actionTargetId, actionTargetId, actionTargetId);
+  return result.changes;
+}
+
 export function hasRecentTarget(targetId: string, withinDays: number): boolean {
   const row = getDb()
     .prepare(

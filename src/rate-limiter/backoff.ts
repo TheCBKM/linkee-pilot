@@ -12,6 +12,11 @@ const SKIP_ERRORS = new Set([
   "errors/action_already_performed",
 ]);
 
+/** Soft-skip: allow a few attempts, then permanently skip the target. */
+export const SOFT_SKIP_MAX_TRIES: Record<string, number> = {
+  "errors/resource_not_found": 2,
+};
+
 const HALT_ERRORS = new Set([
   "errors/account_restricted",
   "errors/disconnected_account",
