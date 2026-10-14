@@ -22,7 +22,7 @@ import { isEsPipelineActive } from "./es-refill.js";
 import { getAgentState, setAgentState } from "../db/store.js";
 import { randomBetween } from "../rate-limiter/human-delay.js";
 
-const ES_NEXT_INVITE_AT_KEY = "es_next_invite_at";
+export const ES_NEXT_INVITE_AT_KEY = "es_next_invite_at";
 
 function isSpacingElapsed(): boolean {
   const next = getAgentState(ES_NEXT_INVITE_AT_KEY);

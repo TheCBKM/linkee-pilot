@@ -19,6 +19,7 @@ import { shouldSyncConnections } from "../actions/sync-connections.js";
 import { shouldRefillEsQueue } from "../actions/es-refill.js";
 import { hasEsInviteWork } from "../actions/es-invite.js";
 import { getEnv } from "../config/env.js";
+import { isMainAgentAlive } from "./lifecycle.js";
 import { getLocalDateString } from "../config/local-time.js";
 
 export type ScheduledAction =
@@ -103,8 +104,21 @@ export function getNextScheduledAction(): ScheduledAction {
   return picked ?? { type: "idle", reason: "all_quotas_exhausted" };
 }
 
-/** ES container: refill the queue, otherwise invite when spacing allows. */
+/**
+ * ES container: refill the queue, otherwise invite when spacing allows.
+ * If the main agent is not running, also do its invite housekeeping
+ * (stale invite withdrawal, connection sync / accept detection).
+ */
 function getNextEsOnlyAction(): ScheduledAction {
+  if (!isMainAgentAlive()) {
+    if (
+      canAct("withdraw_invite").allowed &&
+      getAgentState(WITHDRAW_INVITE_IDLE_DATE_KEY) !== getLocalDateString()
+    ) {
+      return { type: "withdraw_invite" };
+    }
+    if (shouldSyncConnections()) return { type: "sync_connections" };
+  }
   if (shouldRefillEsQueue()) return { type: "es_refill" };
   if (hasEsInviteWork()) return { type: "es_invite" };
   return { type: "idle", reason: "es_waiting" };

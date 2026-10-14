@@ -176,6 +176,15 @@ docker compose exec agent node dist/cli/index.js status
 docker compose exec es-agent node dist/cli/index.js es-preview -c india -s founders --notes
 ```
 
+**ES pipeline only** (main agent off):
+
+```bash
+docker compose stop agent
+docker compose up -d es-agent dashboard
+```
+
+When the main agent's heartbeat is missing (stopped or stale >60 min), `es-agent` also runs its invite housekeeping: daily withdrawal of invites pending 21+ days and connection sync, so ES accepts are detected. The dashboard's **ES invites** section shows ES agent health, invites/accepts by country and segment, queue, next invite time, and the last 20 invites with the exact note sent.
+
 On an account restriction both agents stay up and idle (no restart loop) until the `halted` flag is cleared.
 
 ## Process Management

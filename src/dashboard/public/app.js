@@ -17,6 +17,9 @@ const ACTION_LABELS = {
   create_post: "Publish post",
   search: "Research",
   profile_audit: "Profile audit",
+  es_lookup: "ES profile lookup",
+  es_invite: "ES invite",
+  es_refill: "ES queue refill",
 };
 
 const STAGE_LABELS = {
@@ -38,6 +41,8 @@ const QUOTA_ORDER = [
   "like_comment",
   "view_profile",
   "send_invite",
+  "es_lookup",
+  "es_invite",
   "withdraw_invite",
   "create_post",
   "profile_audit",
@@ -560,8 +565,107 @@ function renderRecentActions(actions) {
     .join("");
 }
 
+const ES_SEGMENT_LABELS = {
+  tech_cxo: "Tech CXOs",
+  eng_executives: "Engineering execs",
+  founders: "Founders / CEOs",
+  product_executives: "Product execs",
+  investors: "Investors",
+};
+
+function titleCase(str) {
+  return (str ?? "").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function renderEsPipeline(es) {
+  if (!es) return;
+  const statusEl = document.getElementById("es-agent-status");
+  let label = "Stopped";
+  let cls = "status-pill is-stopped";
+  if (es.agent.running) {
+    label = es.enabled ? "Running" : "Running (disabled)";
+    cls = es.enabled ? "status-pill is-running" : "status-pill is-paused";
+  }
+  statusEl.innerHTML = `<span class="${cls}">${escapeHtml(label)}</span>`;
+  document.getElementById("es-agent-meta").textContent =
+    `heartbeat ${relativeTime(es.agent.lastHeartbeat)} · last ${
+      es.agent.lastAction ? labelAction(es.agent.lastAction) : "none"
+    }`;
+
+  const t = es.totals;
+  document.getElementById("es-invited").textContent = String(t.invited);
+  const last24h = es.byCountry.reduce((sum, c) => sum + (c.invited24h ?? 0), 0);
+  document.getElementById("es-invited-meta").textContent = `${last24h} in last 24h`;
+  document.getElementById("es-connected").textContent = String(t.connected);
+  document.getElementById("es-accept-rate").textContent = t.invited
+    ? `${Math.round((t.connected / t.invited) * 100)}% accept rate`
+    : "no invites yet";
+  document.getElementById("es-queued").textContent = String(t.queued);
+
+  let next = "next invite: now";
+  if (es.nextInviteAt) {
+    const ts = Date.parse(es.nextInviteAt);
+    if (!Number.isNaN(ts) && ts > Date.now()) {
+      next = `next invite in ${Math.max(1, Math.round((ts - Date.now()) / 60000))}m`;
+    }
+  }
+  document.getElementById("es-next-invite").textContent = next;
+  document.getElementById("es-skipped").textContent = `${t.skipped} / ${t.failed}`;
+  document.getElementById("es-withdrawn").textContent = `${t.withdrawn} withdrawn (21d+)`;
+
+  document.getElementById("es-country-body").innerHTML = es.byCountry.length
+    ? es.byCountry
+        .map((c) => `
+      <tr>
+        <td>${escapeHtml(titleCase(c.country))}</td>
+        <td>${c.queued}</td>
+        <td>${c.invited}</td>
+        <td>${c.invited24h}</td>
+        <td>${c.connected}</td>
+      </tr>`)
+        .join("")
+    : '<tr><td colspan="5" class="empty">No candidates yet</td></tr>';
+
+  document.getElementById("es-segment-body").innerHTML = es.bySegment.length
+    ? es.bySegment
+        .map((s) => `
+      <tr>
+        <td>${escapeHtml(ES_SEGMENT_LABELS[s.segment] ?? s.segment)}</td>
+        <td>${s.invited}</td>
+        <td>${s.connected}</td>
+      </tr>`)
+        .join("")
+    : '<tr><td colspan="3" class="empty">No candidates yet</td></tr>';
+
+  const tbody = document.getElementById("es-invites-body");
+  const noData = document.getElementById("no-es-invites");
+  if (!es.recentInvites.length) {
+    tbody.innerHTML = "";
+    noData.classList.remove("hidden");
+    return;
+  }
+  noData.classList.add("hidden");
+  tbody.innerHTML = es.recentInvites
+    .map((i) => {
+      // invited_at is SQLite UTC "YYYY-MM-DD HH:MM:SS"
+      const when = relativeTime(i.invited_at.replace(" ", "T") + "Z");
+      const url = i.linkedin_url ? `https://${i.linkedin_url.replace(/^https?:\/\//, "")}` : null;
+      const name = escapeHtml(titleCase(i.full_name ?? "—"));
+      return `
+      <tr>
+        <td class="mono">${when}</td>
+        <td>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${name}</a>` : name}<div class="card-sub">${escapeHtml(titleCase(i.country))}</div></td>
+        <td class="preview" title="${escapeHtml(i.job_title ?? "")}">${escapeHtml(truncate(titleCase(i.job_title), 40))}<div class="card-sub">${escapeHtml(truncate(titleCase(i.company), 30))}</div></td>
+        <td class="preview">${escapeHtml(i.invite_note ?? "(no note)")}</td>
+        <td>${escapeHtml(i.status)}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
 function render(data) {
   renderStatusCards(data);
+  renderEsPipeline(data.esPipeline);
   renderOutreachStats(data.outreach);
   renderNurtureStats(data.nurture);
   renderRecentAccepts(data.nurture?.recentAccepts);

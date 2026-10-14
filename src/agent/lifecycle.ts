@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { getPidPath } from "../config/env.js";
-import { setAgentState } from "../db/store.js";
+import { getAgentState, setAgentState } from "../db/store.js";
 import { notifyDiscord } from "../notifications/discord.js";
 import { getEnv } from "../config/env.js";
 
@@ -115,4 +115,17 @@ export function writeHeartbeat(lastAction?: string): void {
   if (lastAction) {
     setAgentState(stateKey("last_action"), lastAction);
   }
+}
+
+/** Heartbeats older than this mean the agent is gone (killed or stopped). */
+export const HEARTBEAT_STALE_MS = 60 * 60_000;
+
+/**
+ * True when the main (non-ES) agent is up. Its heartbeat can lag during long
+ * backoff or burst sleeps, so the window is generous.
+ */
+export function isMainAgentAlive(): boolean {
+  if (getAgentState("status") !== "running") return false;
+  const hb = getAgentState("last_heartbeat");
+  return !!hb && Date.now() - new Date(hb).getTime() < HEARTBEAT_STALE_MS;
 }
