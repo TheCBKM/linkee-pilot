@@ -10,10 +10,31 @@ import {
 import { handleApiError, SOFT_SKIP_MAX_TRIES } from "./backoff.js";
 import {
   countFailedActions,
+  getAgentState,
   logAction,
   markPersonConnected,
   markTargetSkipped,
+  setAgentState,
 } from "../db/store.js";
+import { LIMITS } from "../config/limits.js";
+
+const LAST_LINKEDIN_CALL_KEY = "last_linkedin_call_at";
+
+/**
+ * Keep a minimum gap between LinkedIn calls across every process sharing the
+ * DB (main and ES containers act on the same account).
+ */
+async function waitForActionGap(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const last = getAgentState(LAST_LINKEDIN_CALL_KEY);
+    const waitMs = last
+      ? new Date(last).getTime() + LIMITS.timing.minGapBetweenActionsMs - Date.now()
+      : 0;
+    if (waitMs <= 0) break;
+    await sleep(waitMs + randomBetween(0, 5_000));
+  }
+  setAgentState(LAST_LINKEDIN_CALL_KEY, new Date().toISOString());
+}
 import { getEnv } from "../config/env.js";
 import { notifyDiscord } from "../notifications/discord.js";
 import { hasEmDash } from "../ai/humanize.js";
@@ -32,7 +53,12 @@ export async function executeWithRateLimit<T>(params: {
   targetId: string;
   content?: string;
   execute: () => Promise<T>;
-}): Promise<{ success: boolean; result?: T; skipped?: boolean }> {
+}): Promise<{
+  success: boolean;
+  result?: T;
+  skipped?: boolean;
+  errorType?: string;
+}> {
   const check = canAct(params.actionType);
   if (!check.allowed) {
     return { success: false, skipped: true };
@@ -85,11 +111,12 @@ export async function executeWithRateLimit<T>(params: {
         result: "skipped",
         errorType,
       });
-      return { success: false, skipped: true };
+      return { success: false, skipped: true, errorType };
     }
   }
 
   try {
+    await waitForActionGap();
     const result = await params.execute();
     logAction({
       actionType: params.actionType,
@@ -142,13 +169,13 @@ export async function executeWithRateLimit<T>(params: {
             ` (${params.actionType} ${params.targetId.slice(0, 80)}` +
             `${changed ? "" : "; no pending target matched"})`
         );
-        return { success: false, skipped: true };
+        return { success: false, skipped: true, errorType };
       }
       // First failure(s): brief pause, keep target pending for one more try.
       if (backoff.sleepMs > 0) {
         await sleep(backoff.sleepMs);
       }
-      return { success: false, skipped: true };
+      return { success: false, skipped: true, errorType };
     }
 
     if (!backoff.skipTarget && !backoff.haltAgent && !backoff.discordNotified) {
@@ -170,14 +197,14 @@ export async function executeWithRateLimit<T>(params: {
 
     if (backoff.skipTarget) {
       markTargetSkipped(params.targetId);
-      return { success: false, skipped: true };
+      return { success: false, skipped: true, errorType };
     }
 
     if (backoff.sleepMs > 0) {
       await sleep(backoff.sleepMs);
     }
 
-    return { success: false, skipped: true };
+    return { success: false, skipped: true, errorType };
   }
 }
 

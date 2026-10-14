@@ -84,6 +84,43 @@ export async function getUserProfile(
   });
 }
 
+export interface LookedUpProfile {
+  provider_id?: string;
+  public_identifier?: string;
+  first_name?: string;
+  last_name?: string;
+  headline?: string;
+  location?: string;
+  is_self?: boolean;
+  is_relationship?: boolean;
+  network_distance?: string;
+  invitation?: { type: "SENT" | "RECEIVED"; status: string };
+}
+
+/**
+ * Profile lookup by public identifier via REST (throws our UnipileError so
+ * backoff.ts can classify 429 / restriction errors).
+ */
+export async function lookupProfile(
+  identifier: string,
+  options?: { notify?: boolean }
+): Promise<LookedUpProfile> {
+  const env = getEnv();
+  const url = new URL(
+    `${env.UNIPILE_BASE_URL}/api/v1/users/${encodeURIComponent(identifier)}`
+  );
+  url.searchParams.set("account_id", env.UNIPILE_ACCOUNT_ID);
+  if (options?.notify) url.searchParams.set("notify", "true");
+
+  const response = await fetch(url.toString(), {
+    headers: { "X-API-KEY": env.UNIPILE_API_KEY, Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new UnipileError(response.status, await response.text());
+  }
+  return response.json() as Promise<LookedUpProfile>;
+}
+
 export async function getOwnProfile() {
   const env = getEnv();
   const client = getUnipileClient();

@@ -37,6 +37,8 @@ function contentHash(text: string): string {
 export async function safetyFilter(params: {
   text: string;
   contentType: "comment" | "invite" | "post";
+  /** false = check only, don't record the hash (previews). */
+  record?: boolean;
 }): Promise<SafetyCheckResult> {
   const { text, contentType } = params;
   const trimmed = text.trim();
@@ -97,7 +99,9 @@ export async function safetyFilter(params: {
     return { safe: false, reason: "moderation_flagged" };
   }
 
-  saveContentHash(hash, contentType);
+  if (params.record !== false) {
+    saveContentHash(hash, contentType);
+  }
   return { safe: true };
 }
 

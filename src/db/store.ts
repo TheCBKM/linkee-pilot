@@ -19,6 +19,7 @@ import {
 } from "../config/sequence.js";
 import { runMigrations, getSchemaPath } from "./migrate.js";
 import { passesIcpFilter } from "../ai/icp-filter.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -920,7 +921,7 @@ export function getRecentContent(limit = 50): string[] {
 
 export function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
   const accountAge = getAccountAgeDays();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   const actionTypes: ActionType[] = [
     "like_post",
     "like_comment",
@@ -932,6 +933,8 @@ export function getQuotaRemaining(): Record<string, { used: number; cap: number 
     "search",
     "profile_audit",
     "view_profile",
+    "es_lookup",
+    "es_invite",
   ];
 
   return Object.fromEntries(
@@ -1029,7 +1032,7 @@ export function upsertConnection(input: UpsertConnectionInput): {
   const inviteAction = getDb()
     .prepare(
       `SELECT 1 FROM actions
-       WHERE action_type = 'send_invite'
+       WHERE action_type IN ('send_invite', 'es_invite')
          AND result = 'success'
          AND (target_id = ? OR target_id = ?)
        LIMIT 1`
@@ -1122,6 +1125,7 @@ export function markPersonConnected(
   providerId: string,
   acceptedAt: string
 ): void {
+  setEsCandidateStatusByProviderId(providerId, "connected");
   const person = findPersonByProviderId(providerId);
   if (!person) return;
 
@@ -1292,3 +1296,223 @@ export function countPendingNurturePosts(): number {
 }
 
 export { stageRank, checkInviteReady };
+
+// --- Elasticsearch invite pipeline ---
+
+export interface EsCandidate {
+  id: number;
+  es_id: string;
+  linkedin_username: string;
+  linkedin_url: string | null;
+  full_name: string | null;
+  job_title: string | null;
+  company: string | null;
+  headline: string | null;
+  country: string;
+  segment: string;
+  provider_id: string | null;
+  status: string;
+  skip_reason: string | null;
+  invite_attempts: number;
+}
+
+export function insertEsCandidates(
+  people: {
+    esId: string;
+    linkedinUsername: string;
+    linkedinUrl: string | null;
+    fullName: string | null;
+    jobTitle: string | null;
+    company: string | null;
+    headline: string | null;
+    country: string;
+  }[],
+  segment: string
+): number {
+  const stmt = getDb().prepare(
+    `INSERT OR IGNORE INTO es_candidates (
+       es_id, linkedin_username, linkedin_url, full_name, job_title,
+       company, headline, country, segment
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  let inserted = 0;
+  const tx = getDb().transaction(() => {
+    for (const p of people) {
+      const res = stmt.run(
+        p.esId,
+        p.linkedinUsername.toLowerCase(),
+        p.linkedinUrl,
+        p.fullName,
+        p.jobTitle,
+        p.company,
+        p.headline,
+        p.country,
+        segment
+      );
+      inserted += res.changes;
+    }
+  });
+  tx();
+  return inserted;
+}
+
+/** Candidates still waiting for a lookup or an invite (or only resolved ones). */
+export function countEsQueue(country?: string, resolvedOnly = false): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM es_candidates
+       WHERE status IN ('queued', 'resolved')
+         AND (? = 0 OR status = 'resolved')
+         AND (? IS NULL OR country = ?)`
+    )
+    .get(resolvedOnly ? 1 : 0, country ?? null, country ?? null) as { n: number };
+  return row.n;
+}
+
+/** Rolling 24h, used only to balance countries. */
+export function countEsInvited24h(country: string): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM es_candidates
+       WHERE country = ? AND invited_at >= datetime('now', '-1 day')`
+    )
+    .get(country) as { n: number };
+  return row.n;
+}
+
+/** Next candidate for a country: already-resolved first, then oldest queued. */
+export function getNextEsCandidate(
+  country: string,
+  resolvedOnly = false
+): EsCandidate | null {
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM es_candidates
+       WHERE status IN ('queued', 'resolved') AND country = ?
+         AND (? = 0 OR status = 'resolved')
+       ORDER BY CASE status WHEN 'resolved' THEN 0 ELSE 1 END, RANDOM()
+       LIMIT 1`
+    )
+    .get(country, resolvedOnly ? 1 : 0) as EsCandidate | undefined;
+  return row ?? null;
+}
+
+export function markEsCandidateResolved(
+  id: number,
+  providerId: string,
+  headline: string | null
+): void {
+  getDb()
+    .prepare(
+      `UPDATE es_candidates SET status = 'resolved', provider_id = ?,
+         headline = COALESCE(?, headline), resolved_at = datetime('now'),
+         updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(providerId, headline, id);
+}
+
+export function markEsCandidateSkipped(
+  id: number,
+  reason: string,
+  providerId?: string | null
+): void {
+  getDb()
+    .prepare(
+      `UPDATE es_candidates SET status = 'skipped', skip_reason = ?,
+         provider_id = COALESCE(?, provider_id), updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(reason, providerId ?? null, id);
+}
+
+export function markEsCandidateInvited(id: number, note: string | null): void {
+  getDb()
+    .prepare(
+      `UPDATE es_candidates SET status = 'invited', invite_note = ?,
+         invite_attempts = invite_attempts + 1,
+         invited_at = datetime('now'), updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(note, id);
+}
+
+/** Count a failed invite; give up after maxAttempts. */
+export function recordEsInviteFailure(
+  id: number,
+  errorType: string,
+  maxAttempts: number
+): void {
+  getDb()
+    .prepare(
+      `UPDATE es_candidates SET
+         invite_attempts = invite_attempts + 1,
+         skip_reason = ?,
+         status = CASE WHEN invite_attempts + 1 >= ? THEN 'failed' ELSE status END,
+         updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(errorType.slice(0, 200), maxAttempts, id);
+}
+
+export function setEsCandidateStatusByProviderId(
+  providerId: string,
+  status: "connected" | "withdrawn"
+): void {
+  if (!providerId) return;
+  getDb()
+    .prepare(
+      `UPDATE es_candidates SET status = ?, updated_at = datetime('now')
+       WHERE provider_id = ? AND status IN ('invited', 'resolved', 'queued')`
+    )
+    .run(status, providerId);
+}
+
+/**
+ * True if this person was already invited, connected, or is in the
+ * warm-outreach pipeline, so the ES pipeline must not touch them.
+ */
+export function isAlreadyEngagedPerson(providerId: string): boolean {
+  if (isKnownConnection(providerId)) return true;
+  const person = findPersonByProviderId(providerId);
+  if (person && person.status !== "filtered" && person.status !== "skipped") {
+    return true;
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM actions
+       WHERE action_type IN ('send_invite', 'es_invite')
+         AND result = 'success' AND target_id = ?
+       LIMIT 1`
+    )
+    .get(providerId);
+  return !!row;
+}
+
+export function getEsStats(): {
+  byStatus: Record<string, number>;
+  byCountry: Record<string, { queued: number; invited: number; invited24h: number }>;
+} {
+  const statusRows = getDb()
+    .prepare(`SELECT status, COUNT(*) AS n FROM es_candidates GROUP BY status`)
+    .all() as { status: string; n: number }[];
+  const countryRows = getDb()
+    .prepare(
+      `SELECT country,
+         SUM(CASE WHEN status IN ('queued', 'resolved') THEN 1 ELSE 0 END) AS queued,
+         SUM(CASE WHEN invited_at IS NOT NULL THEN 1 ELSE 0 END) AS invited,
+         SUM(CASE WHEN invited_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS invited24h
+       FROM es_candidates GROUP BY country`
+    )
+    .all() as { country: string; queued: number; invited: number; invited24h: number }[];
+
+  return {
+    byStatus: Object.fromEntries(statusRows.map((r) => [r.status, r.n])),
+    byCountry: Object.fromEntries(
+      countryRows.map((r) => [
+        r.country,
+        { queued: r.queued, invited: r.invited, invited24h: r.invited24h },
+      ])
+    ),
+  };
+}

@@ -125,3 +125,31 @@ CREATE INDEX IF NOT EXISTS idx_connections_accepted
   ON connections(accepted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_connections_engaged
   ON connections(last_engaged_at);
+
+-- Elasticsearch invite pipeline candidates (kept apart from warm-outreach targets)
+CREATE TABLE IF NOT EXISTS es_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  es_id TEXT NOT NULL UNIQUE,
+  linkedin_username TEXT NOT NULL UNIQUE,
+  linkedin_url TEXT,
+  full_name TEXT,
+  job_title TEXT,
+  company TEXT,
+  headline TEXT,
+  country TEXT NOT NULL,
+  segment TEXT NOT NULL,
+  provider_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued', -- queued | resolved | invited | skipped | failed | withdrawn | connected
+  skip_reason TEXT,
+  invite_attempts INTEGER NOT NULL DEFAULT 0,
+  invite_note TEXT,
+  queued_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT,
+  invited_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_es_candidates_status
+  ON es_candidates(status, country);
+CREATE INDEX IF NOT EXISTS idx_es_candidates_provider
+  ON es_candidates(provider_id);

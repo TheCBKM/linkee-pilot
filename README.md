@@ -119,6 +119,74 @@ The agent also maintains existing relationships so activity looks more human on 
 4. **Nurture engagement** — ~28% chance to prefer nurture posts when available; boosts recent accepts (14d); 7-day per-connection cooldown; **does not** advance the cold-outreach invite sequence.
 5. Nurture likes/comments share the same daily `like_post` / `comment_post` caps as outbound engagement.
 
+## Elasticsearch invite pipeline
+
+A second, independent invite source for personal networking (not Scrummer outreach). It pulls ICP people from the Elasticsearch `person` index and sends a connection request with a short personal note. No likes or comments, just search → lookup → invite.
+
+```
+ES query (US / India, random sample) → es_candidates queue
+  → es_lookup: Unipile profile lookup (skip if self, 1st-degree, pending invite, or already in warm pipeline)
+  → es_invite: AI note (no product mention) → connection request
+```
+
+| Item | Detail |
+|------|--------|
+| Segments (rotated) | Engineering leaders, tech founders/CXOs, senior engineers/architects, product & agile leaders |
+| Filters | Tech industries only, title phrase match, excludes interns/students/recruiters/open-to-work |
+| Geography | United States + India, balanced ~50/50 by invites sent per day |
+| Caps | `es_lookup` 40/day, `es_invite` 15/day **and** `send_invite + es_invite` ≤ the `send_invite` cap (25/day) |
+| Backoff | A 429 / limit error on either invite type blocks both |
+| Accepts / withdrawals | Same connection sync + 21-day stale withdrawal as warm invites |
+
+Enable it in `.env`:
+
+```bash
+ES_PIPELINE_ENABLED=true
+ES_URL=https://your-es-host
+ES_USERNAME=...
+ES_PASSWORD=...
+```
+
+Preview who it would target (ES only, no LinkedIn calls, nothing saved):
+
+```bash
+npx tsx src/cli/index.ts es-preview -c india -s eng_executives -n 10
+```
+
+`npm run agent:status` shows the queue and invites per country. Targeting lives in `src/config/es-icp.ts`.
+
+## Docker Compose
+
+Three services share one image and one SQLite volume:
+
+| Service | `AGENT_MODE` | Does |
+|---------|--------------|------|
+| `agent` | `main` | Warm outreach, posts, replies, nurture, invite withdrawal, connection sync |
+| `es-agent` | `es` | Elasticsearch invite pipeline only (idles unless `ES_PIPELINE_ENABLED=true`) |
+| `dashboard` | – | Read-only dashboard on `127.0.0.1:3847` |
+
+Because both agents act on the same LinkedIn account, the shared DB enforces the combined invite cap, backoff, halt state, and a minimum 40s gap between any two LinkedIn calls across containers. ES invites are spaced 20–50 min apart, so ~15/day spread over the workday.
+
+```bash
+docker compose up -d --build            # everything
+docker compose up -d es-agent           # just the ES pipeline
+docker compose logs -f es-agent
+docker compose stop es-agent            # pause ES invites, main agent keeps running
+docker compose exec agent node dist/cli/index.js status
+docker compose exec es-agent node dist/cli/index.js es-preview -c india -s founders --notes
+```
+
+**ES pipeline only** (main agent off):
+
+```bash
+docker compose stop agent
+docker compose up -d es-agent dashboard
+```
+
+When the main agent's heartbeat is missing (stopped or stale >60 min), `es-agent` also runs its invite housekeeping: daily withdrawal of invites pending 21+ days and connection sync, so ES accepts are detected. The dashboard's **ES invites** section shows ES agent health, invites/accepts by country and segment, queue, next invite time, and the last 20 invites with the exact note sent.
+
+On an account restriction both agents stay up and idle (no restart loop) until the `halted` flag is cleared.
+
 ## Process Management
 
 **pm2:**

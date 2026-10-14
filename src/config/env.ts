@@ -29,6 +29,21 @@ const fullEnvSchema = z.object({
   DISCORD_WEBHOOK_URL: discordWebhookSchema,
   /** LinkedIn provider_id for the account owner — never invite / target this profile. */
   OWN_PROVIDER_ID: z.string().default(""),
+  /**
+   * all  = everything in one process (default)
+   * main = warm outreach / posts / nurture only (no ES pipeline)
+   * es   = ES invite pipeline only (run as a separate container)
+   */
+  AGENT_MODE: z.enum(["all", "main", "es"]).default("all"),
+  /** Elasticsearch people index for the ES invite pipeline. */
+  ES_PIPELINE_ENABLED: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  ES_URL: z.union([z.string().url(), z.literal("")]).default(""),
+  ES_INDEX: z.string().default("person"),
+  ES_USERNAME: z.string().default(""),
+  ES_PASSWORD: z.string().default(""),
 });
 
 const minimalEnvSchema = z.object({
@@ -48,6 +63,21 @@ const minimalEnvSchema = z.object({
     .transform((v) => v === "true"),
   DISCORD_WEBHOOK_URL: discordWebhookSchema,
   OWN_PROVIDER_ID: z.string().default(""),
+  /**
+   * all  = everything in one process (default)
+   * main = warm outreach / posts / nurture only (no ES pipeline)
+   * es   = ES invite pipeline only (run as a separate container)
+   */
+  AGENT_MODE: z.enum(["all", "main", "es"]).default("all"),
+  /** Elasticsearch people index for the ES invite pipeline. */
+  ES_PIPELINE_ENABLED: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true"),
+  ES_URL: z.union([z.string().url(), z.literal("")]).default(""),
+  ES_INDEX: z.string().default("person"),
+  ES_USERNAME: z.string().default(""),
+  ES_PASSWORD: z.string().default(""),
 });
 
 export type Env = z.infer<typeof fullEnvSchema>;

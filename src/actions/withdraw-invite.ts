@@ -9,8 +9,10 @@ import {
   findPersonByProviderId,
   getAgentState,
   markInviteWithdrawn,
+  setEsCandidateStatusByProviderId,
   setAgentState,
 } from "../db/store.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export const WITHDRAW_INVITE_IDLE_DATE_KEY = "withdraw_invite_idle_date";
 
@@ -22,7 +24,7 @@ export type WithdrawResult = {
 };
 
 function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDateString();
 }
 
 function inviteSentAt(invite: SentInvitation): Date | null {
@@ -105,6 +107,7 @@ export async function withdrawStaleInvite(): Promise<WithdrawResult> {
     if (person) {
       markInviteWithdrawn(person.target_id);
     }
+    setEsCandidateStatusByProviderId(invite.invited_user_id, "withdrawn");
   }
 
   return {

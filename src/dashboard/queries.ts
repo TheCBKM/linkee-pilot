@@ -18,6 +18,16 @@ import {
   CONNECTIONS_SYNC_COUNT_DATE_KEY,
   CONNECTIONS_SYNC_COUNT_KEY,
 } from "../actions/sync-connections.js";
+import { getLocalDateString } from "../config/local-time.js";
+import { getEnv } from "../config/env.js";
+import { ES_NEXT_INVITE_AT_KEY } from "../actions/es-invite.js";
+
+/** Liveness from DB heartbeat: works across containers where PIDs aren't visible. */
+function isHeartbeatFresh(statusKey: string, heartbeatKey: string): boolean {
+  if (getAgentState(statusKey) !== "running") return false;
+  const hb = getAgentState(heartbeatKey);
+  return !!hb && Date.now() - new Date(hb).getTime() < 15 * 60_000;
+}
 
 let db: Database.Database | null = null;
 
@@ -59,7 +69,7 @@ function getQuotaCount(actionType: ActionType, date: string): number {
 
 function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
   const accountAge = getAccountAgeDaysReadOnly();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   const actionTypes: ActionType[] = [
     "like_post",
     "like_comment",
@@ -71,6 +81,8 @@ function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
     "search",
     "profile_audit",
     "view_profile",
+    "es_lookup",
+    "es_invite",
   ];
 
   return Object.fromEntries(
@@ -315,6 +327,7 @@ export interface DashboardOverview {
   }[];
   inviteReadyTotal: number;
   pendingTargetsTotal: number;
+  esPipeline: EsPipelineOverview;
   postHealth: {
     postsThisWeek: number;
     originalsThisWeek: number;
@@ -353,7 +366,9 @@ export function getDashboardOverview(): DashboardOverview {
   const database = getReadOnlyDb();
   const today = new Date().toISOString().slice(0, 10);
   const pid = readPidFile();
-  const running = pid ? isAgentRunning(pid) : false;
+  const running =
+    (pid ? isAgentRunning(pid) : false) ||
+    isHeartbeatFresh("status", "last_heartbeat");
 
   const actionsToday = database
     .prepare(
@@ -503,11 +518,11 @@ export function getDashboardOverview(): DashboardOverview {
       .get() as { c: number }
   ).c;
 
-  const todayUtc = new Date().toISOString().slice(0, 10);
+  const todayLocal = getLocalDateString();
   const syncCountDate = getAgentState(CONNECTIONS_SYNC_COUNT_DATE_KEY);
   const syncCountRaw = getAgentState(CONNECTIONS_SYNC_COUNT_KEY);
   const syncsToday =
-    syncCountDate === todayUtc && syncCountRaw
+    syncCountDate === todayLocal && syncCountRaw
       ? Number.parseInt(syncCountRaw, 10) || 0
       : 0;
 
@@ -605,7 +620,109 @@ export function getDashboardOverview(): DashboardOverview {
     inviteReadyPeople,
     inviteReadyTotal: inviteReadyRow.count,
     pendingTargetsTotal,
+    esPipeline: getEsPipelineOverview(database),
     postHealth: getPostHealth(database),
     icpQuality: getIcpQuality(database),
+  };
+}
+
+export interface EsPipelineOverview {
+  enabled: boolean;
+  agent: {
+    running: boolean;
+    status: string | null;
+    lastHeartbeat: string | null;
+    lastAction: string | null;
+  };
+  nextInviteAt: string | null;
+  totals: {
+    queued: number;
+    invited: number;
+    connected: number;
+    skipped: number;
+    failed: number;
+    withdrawn: number;
+  };
+  byCountry: {
+    country: string;
+    queued: number;
+    invited: number;
+    invited24h: number;
+    connected: number;
+  }[];
+  bySegment: { segment: string; invited: number; connected: number }[];
+  recentInvites: {
+    full_name: string | null;
+    job_title: string | null;
+    company: string | null;
+    country: string;
+    segment: string;
+    linkedin_url: string | null;
+    invite_note: string | null;
+    status: string;
+    invited_at: string;
+  }[];
+}
+
+function getEsPipelineOverview(database: Database.Database): EsPipelineOverview {
+  const statusRows = database
+    .prepare(`SELECT status, COUNT(*) AS n FROM es_candidates GROUP BY status`)
+    .all() as { status: string; n: number }[];
+  const byStatus = Object.fromEntries(statusRows.map((r) => [r.status, r.n]));
+  const n = (key: string) => (byStatus[key] as number | undefined) ?? 0;
+
+  const byCountry = (
+    database
+      .prepare(
+        `SELECT country,
+           SUM(CASE WHEN status IN ('queued', 'resolved') THEN 1 ELSE 0 END) AS queued,
+           SUM(CASE WHEN invited_at IS NOT NULL THEN 1 ELSE 0 END) AS invited,
+           SUM(CASE WHEN invited_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS invited24h,
+           SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END) AS connected
+         FROM es_candidates GROUP BY country ORDER BY country`
+      )
+      .all() as EsPipelineOverview["byCountry"]
+  );
+
+  const bySegment = database
+    .prepare(
+      `SELECT segment,
+         SUM(CASE WHEN invited_at IS NOT NULL THEN 1 ELSE 0 END) AS invited,
+         SUM(CASE WHEN status = 'connected' THEN 1 ELSE 0 END) AS connected
+       FROM es_candidates GROUP BY segment ORDER BY invited DESC`
+    )
+    .all() as EsPipelineOverview["bySegment"];
+
+  const recentInvites = database
+    .prepare(
+      `SELECT full_name, job_title, company, country, segment, linkedin_url,
+         invite_note, status, invited_at
+       FROM es_candidates
+       WHERE invited_at IS NOT NULL
+       ORDER BY invited_at DESC
+       LIMIT 20`
+    )
+    .all() as EsPipelineOverview["recentInvites"];
+
+  return {
+    enabled: getEnv().ES_PIPELINE_ENABLED,
+    agent: {
+      running: isHeartbeatFresh("es_status", "es_last_heartbeat"),
+      status: getAgentState("es_status"),
+      lastHeartbeat: getAgentState("es_last_heartbeat"),
+      lastAction: getAgentState("es_last_action"),
+    },
+    nextInviteAt: getAgentState(ES_NEXT_INVITE_AT_KEY),
+    totals: {
+      queued: n("queued") + n("resolved"),
+      invited: n("invited") + n("connected") + n("withdrawn"),
+      connected: n("connected"),
+      skipped: n("skipped"),
+      failed: n("failed"),
+      withdrawn: n("withdrawn"),
+    },
+    byCountry,
+    bySegment,
+    recentInvites,
   };
 }
