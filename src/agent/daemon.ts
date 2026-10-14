@@ -21,6 +21,8 @@ import { replyToOwnPostComment } from "../actions/reply-comment.js";
 import { sendConnectionRequest } from "../actions/send-invite.js";
 import { withdrawStaleInvite } from "../actions/withdraw-invite.js";
 import { syncConnections } from "../actions/sync-connections.js";
+import { isEsPipelineActive, refillEsQueue } from "../actions/es-refill.js";
+import { sendEsInvite } from "../actions/es-invite.js";
 import { viewProfile } from "../actions/view-profile.js";
 import { discoverJobs } from "../actions/discover-jobs.js";
 import {
@@ -32,16 +34,24 @@ import { publishPost } from "../actions/create-post.js";
 import { fetchAndRecordProfile } from "../actions/fetch-profile.js";
 import { gatherPostTrends } from "../ai/post-trends.js";
 import { notifyDiscord } from "../notifications/discord.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 const IDLE_SLEEP_MS = 60_000;
+const HALTED_SLEEP_MS = 10 * 60_000;
 const MIN_SLEEP_MS = 5_000;
 const QUOTAS_EXHAUSTED_NOTIFIED_KEY = "discord_quotas_exhausted_date";
 
 export async function startDaemon(): Promise<void> {
   loadEnv({ requireApiKeys: true });
   const env = getEnv();
-  console.log("[agent] Starting LinkedIn Profile Enhancer");
+  const esOnly = env.AGENT_MODE === "es";
+  console.log(`[agent] Starting LinkedIn Profile Enhancer (mode: ${env.AGENT_MODE})`);
   console.log(`[agent] Dry run: ${env.DRY_RUN}, Paused: ${env.PAUSED}`);
+  if (esOnly && !isEsPipelineActive()) {
+    console.warn(
+      "[agent] AGENT_MODE=es but the ES pipeline is inactive (set ES_PIPELINE_ENABLED=true and ES_URL/ES_USERNAME/ES_PASSWORD)"
+    );
+  }
 
   writePidFile();
   resetBurst();
@@ -50,25 +60,31 @@ export async function startDaemon(): Promise<void> {
   });
 
   notifyDiscord({
-    title: "Agent · Started",
+    title: esOnly ? "ES agent · Started" : "Agent · Started",
     description: "LinkedIn Profile Enhancer is running.",
     severity: "info",
     fields: [
       { name: "Dry run", value: String(env.DRY_RUN), inline: true },
       { name: "Paused", value: String(env.PAUSED), inline: true },
       { name: "Timezone", value: env.TIMEZONE, inline: true },
+      { name: "Mode", value: env.AGENT_MODE, inline: true },
     ],
   });
 
-  // Initial profile snapshot
-  await fetchAndRecordProfile();
+  // Initial profile snapshot (main agent only; never on a halted account)
+  if (!esOnly && !isHalted()) {
+    await fetchAndRecordProfile();
+  }
 
   while (!isShuttingDown()) {
     writeHeartbeat();
 
     if (isHalted()) {
-      console.error("[agent] Halted due to account restriction. Manual restart required.");
-      break;
+      // Stay up and idle instead of exiting: under Docker's restart policy an
+      // exit would restart the container in a loop. Clear the halt to resume.
+      console.error("[agent] Halted due to account restriction. Idling until the halt is cleared.");
+      await sleep(HALTED_SLEEP_MS);
+      continue;
     }
 
     if (env.PAUSED) {
@@ -88,7 +104,7 @@ export async function startDaemon(): Promise<void> {
 
     if (scheduled.type === "idle") {
       console.log(`[agent] Idle: ${scheduled.reason}`);
-      if (scheduled.reason === "all_quotas_exhausted") {
+      if (scheduled.reason === "all_quotas_exhausted" && !esOnly) {
         notifyQuotasExhaustedOnce();
       }
       await sleep(IDLE_SLEEP_MS);
@@ -245,7 +261,35 @@ async function executeAction(
       writeHeartbeat("sync_connections");
       break;
     }
-    case "view_profile": {
+    case "es_refill": {
+      console.log("[agent] Refilling ES candidate queue...");
+      try {
+        const r = await refillEsQueue();
+        console.log(
+          `[agent] ES refill (${r.country}, ${r.segment}): fetched ${r.fetched}, filtered ${r.filtered}, +${r.inserted} new`
+        );
+      } catch (err) {
+        console.error("[agent] ES refill failed:", err);
+        notifyDiscord({
+          title: "ES pipeline · Refill failed",
+          description: String(err).slice(0, 300),
+          severity: "warn",
+        });
+      }
+      writeHeartbeat("es_refill");
+      break;
+    }
+    case "es_invite": {
+      const r = await sendEsInvite();
+      console.log(
+        r.sent
+          ? `[agent] ES invite sent to ${r.candidate} (${r.country})`
+          : `[agent] ES invite skipped${r.candidate ? ` for ${r.candidate}` : ""}: ${r.reason}`
+      );
+      writeHeartbeat("es_invite");
+      break;
+    }
+        case "view_profile": {
       console.log(`[agent] Viewing profile of ${action.target.author_name ?? "unknown"}`);
       await viewProfile(action.target);
       writeHeartbeat("view_profile");
@@ -288,7 +332,7 @@ async function executeAction(
 }
 
 function notifyQuotasExhaustedOnce(): void {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   if (getAgentState(QUOTAS_EXHAUSTED_NOTIFIED_KEY) === today) return;
   setAgentState(QUOTAS_EXHAUSTED_NOTIFIED_KEY, today);
   notifyDiscord({

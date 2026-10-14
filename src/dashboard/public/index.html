@@ -33,6 +33,7 @@
     <a href="#agent-health">Health</a>
     <a href="#opportunities">Opportunities</a>
     <a href="#dms">DMs</a>
+    <a href="#es-pipeline">ES invites</a>
     <a href="#outreach">Outreach</a>
     <a href="#nurture">Nurture</a>
     <a href="#content">Content</a>
@@ -185,6 +186,96 @@
           </table>
         </div>
         <p id="no-dm-history" class="empty hidden">No DMs sent or rejected yet</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="es-pipeline">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">ES invite pipeline</h2>
+          <p class="section-desc">Elasticsearch → profile lookup → invite with a personal note (US + India)</p>
+        </div>
+      </div>
+
+      <section class="cards outreach-cards" id="es-cards" aria-label="ES pipeline stats">
+        <div class="card">
+          <div class="card-label">ES Agent</div>
+          <div class="card-value" id="es-agent-status">—</div>
+          <div class="card-sub" id="es-agent-meta">—</div>
+        </div>
+        <div class="card card-highlight">
+          <div class="card-label">Invited (total)</div>
+          <div class="card-value" id="es-invited">—</div>
+          <div class="card-sub" id="es-invited-meta">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Accepted</div>
+          <div class="card-value" id="es-connected">—</div>
+          <div class="card-sub" id="es-accept-rate">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Queue</div>
+          <div class="card-value" id="es-queued">—</div>
+          <div class="card-sub" id="es-next-invite">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Skipped / Failed</div>
+          <div class="card-value" id="es-skipped">—</div>
+          <div class="card-sub" id="es-withdrawn">—</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>By country and segment</h2>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">ES invites by country</caption>
+            <thead>
+              <tr>
+                <th scope="col">Country</th>
+                <th scope="col">Queued</th>
+                <th scope="col">Invited</th>
+                <th scope="col">Last 24h</th>
+                <th scope="col">Accepted</th>
+              </tr>
+            </thead>
+            <tbody id="es-country-body"></tbody>
+          </table>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">ES invites by segment</caption>
+            <thead>
+              <tr>
+                <th scope="col">Segment</th>
+                <th scope="col">Invited</th>
+                <th scope="col">Accepted</th>
+              </tr>
+            </thead>
+            <tbody id="es-segment-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Recent ES invites</h2>
+        <p class="panel-desc">Last 20 invites with the exact note sent</p>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Recent ES invites</caption>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Person</th>
+                <th scope="col">Role</th>
+                <th scope="col">Note</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="es-invites-body"></tbody>
+          </table>
+        </div>
+        <p id="no-es-invites" class="empty hidden">No ES invites sent yet</p>
       </section>
     </section>
 

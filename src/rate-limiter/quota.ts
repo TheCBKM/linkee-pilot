@@ -1,7 +1,9 @@
 import { getEnv } from "../config/env.js";
 import {
   type ActionType,
+  backoffKeysFor,
   getDailyCap,
+  isInviteAction,
   LIMITS,
 } from "../config/limits.js";
 import {
@@ -12,6 +14,7 @@ import {
   isHalted,
 } from "../db/store.js";
 import { isWithinWorkingHours, msUntilWorkingHours } from "./schedule.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export interface CanActResult {
   allowed: boolean;
@@ -20,7 +23,7 @@ export interface CanActResult {
 }
 
 function todayDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDateString();
 }
 
 export function canAct(actionType: ActionType): CanActResult {
@@ -40,7 +43,9 @@ export function canAct(actionType: ActionType): CanActResult {
     };
   }
 
-  const backoff = getBackoff(actionType);
+  const backoff = backoffKeysFor(actionType)
+    .map((key) => getBackoff(key))
+    .find((b) => b !== null);
   if (backoff) {
     const sleepMs = new Date(backoff.blocked_until).getTime() - Date.now();
     return {
@@ -56,6 +61,18 @@ export function canAct(actionType: ActionType): CanActResult {
 
   if (used >= cap) {
     return { allowed: false, reason: "quota_exhausted" };
+  }
+
+  // All invite sources share one daily budget on the account.
+  if (isInviteAction(actionType)) {
+    const inviteCap = getDailyCap("send_invite", accountAge);
+    const invitesToday = LIMITS.inviteGroup.reduce(
+      (sum, type) => sum + getQuotaCount(type, todayDate()),
+      0
+    );
+    if (invitesToday >= inviteCap) {
+      return { allowed: false, reason: "invite_quota_exhausted" };
+    }
   }
 
   return { allowed: true };

@@ -46,6 +46,8 @@ const MAX_LENGTHS: Record<SafetyContentType, number> = {
 export async function safetyFilter(params: {
   text: string;
   contentType: SafetyContentType;
+  /** false = check only, don't record the hash (previews). */
+  record?: boolean;
 }): Promise<SafetyCheckResult> {
   const { text, contentType } = params;
   const trimmed = text.trim();
@@ -101,7 +103,9 @@ export async function safetyFilter(params: {
     return { safe: false, reason: "moderation_flagged" };
   }
 
-  saveContentHash(hash, contentType);
+  if (params.record !== false) {
+    saveContentHash(hash, contentType);
+  }
   return { safe: true };
 }
 

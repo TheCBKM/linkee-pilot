@@ -17,6 +17,10 @@ import type { Target } from "../db/store.js";
 import { POST_BOOST_UNTIL_KEY } from "../actions/create-post.js";
 import { WITHDRAW_INVITE_IDLE_DATE_KEY } from "../actions/withdraw-invite.js";
 import { shouldSyncConnections } from "../actions/sync-connections.js";
+import { shouldRefillEsQueue } from "../actions/es-refill.js";
+import { hasEsInviteWork } from "../actions/es-invite.js";
+import { isMainAgentAlive } from "./lifecycle.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export type ScheduledAction =
   | { type: "research" }
@@ -26,6 +30,8 @@ export type ScheduledAction =
   | { type: "comment_post"; target: Target }
   | { type: "reply_comment" }
   | { type: "send_invite"; target: Target }
+  | { type: "es_refill" }
+  | { type: "es_invite" }
   | { type: "withdraw_invite" }
   | { type: "sync_connections" }
   | { type: "view_profile"; target: Target }
@@ -52,6 +58,10 @@ export function getNextScheduledAction(): ScheduledAction {
     return { type: "idle", reason: "outside_working_hours" };
   }
 
+  if (getEnv().AGENT_MODE === "es") {
+    return getNextEsOnlyAction();
+  }
+
   if (isProfileAuditDay(new Date()) && canAct("profile_audit").allowed) {
     return { type: "profile_audit" };
   }
@@ -60,7 +70,7 @@ export function getNextScheduledAction(): ScheduledAction {
     return { type: "create_post" };
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   if (
     canAct("withdraw_invite").allowed &&
     getAgentState(WITHDRAW_INVITE_IDLE_DATE_KEY) !== today
@@ -72,6 +82,11 @@ export function getNextScheduledAction(): ScheduledAction {
   // Does not consume like/comment/invite quotas.
   if (shouldSyncConnections()) {
     return { type: "sync_connections" };
+  }
+
+  // Elasticsearch candidate refill: no LinkedIn calls, no quota.
+  if (shouldRefillEsQueue()) {
+    return { type: "es_refill" };
   }
 
   const boostActive = isPostBoostActive();
@@ -90,6 +105,26 @@ export function getNextScheduledAction(): ScheduledAction {
 
   const picked = weightedPick(candidates, weights);
   return picked ?? { type: "idle", reason: "all_quotas_exhausted" };
+}
+
+/**
+ * ES container: refill the queue, otherwise invite when spacing allows.
+ * If the main agent is not running, also do its invite housekeeping
+ * (stale invite withdrawal, connection sync / accept detection).
+ */
+function getNextEsOnlyAction(): ScheduledAction {
+  if (!isMainAgentAlive()) {
+    if (
+      canAct("withdraw_invite").allowed &&
+      getAgentState(WITHDRAW_INVITE_IDLE_DATE_KEY) !== getLocalDateString()
+    ) {
+      return { type: "withdraw_invite" };
+    }
+    if (shouldSyncConnections()) return { type: "sync_connections" };
+  }
+  if (shouldRefillEsQueue()) return { type: "es_refill" };
+  if (hasEsInviteWork()) return { type: "es_invite" };
+  return { type: "idle", reason: "es_waiting" };
 }
 
 function buildEligibleCandidates(
@@ -128,6 +163,13 @@ function buildEligibleCandidates(
     if (actionType === "reply_comment") {
       if (!hasRecentOwnPosts(LIMITS.ownPostReplyWindowHours)) continue;
       candidates.push({ type: "reply_comment" });
+      weights.push(weight);
+      continue;
+    }
+
+    if (actionType === "es_invite") {
+      if (!hasEsInviteWork()) continue;
+      candidates.push({ type: "es_invite" });
       weights.push(weight);
       continue;
     }
@@ -207,6 +249,7 @@ function getWeightsForWindow(
         { actionType: "dm_followup", weight: 2 },
         { actionType: "like_post", weight: 2 },
         { actionType: "comment_post", weight: 2 },
+        { actionType: "es_invite", weight: 2 },
       ];
     case "midday":
       return [
@@ -217,6 +260,7 @@ function getWeightsForWindow(
         { actionType: "like_comment", weight: 2 },
         { actionType: "like_post", weight: 2 },
         { actionType: "discover_jobs", weight: 1 },
+        { actionType: "es_invite", weight: 2 },
       ];
     case "afternoon":
       return [
@@ -227,6 +271,7 @@ function getWeightsForWindow(
         { actionType: "search", weight: 2 },
         { actionType: "reply_comment", weight: 2 },
         { actionType: "dm_followup", weight: 1 },
+        { actionType: "es_invite", weight: 3 },
       ];
     case "late_afternoon":
       return [
@@ -237,6 +282,7 @@ function getWeightsForWindow(
         { actionType: "like_comment", weight: 2 },
         { actionType: "dm_followup", weight: 2 },
         { actionType: "discover_jobs", weight: 1 },
+        { actionType: "es_invite", weight: 2 },
       ];
     default:
       return [{ actionType: "search", weight: 1 }];

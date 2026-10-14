@@ -1,3 +1,5 @@
+import { getLocalWeekdayOf } from "./local-time.js";
+
 export type ActionType =
   | "like_post"
   | "like_comment"
@@ -11,7 +13,9 @@ export type ActionType =
   | "view_profile"
   | "discover_jobs"
   | "send_dm"
-  | "dm_followup";
+  | "dm_followup"
+  | "es_lookup"
+  | "es_invite";
 
 export const LIMITS = {
   rampUpDays: 14,
@@ -34,7 +38,34 @@ export const LIMITS = {
     discover_jobs: { rampUp: 6, steady: 12 },
     send_dm: { rampUp: 5, steady: 10 },
     dm_followup: { rampUp: 3, steady: 8 },
+    // ES pipeline: profile lookups before invite, and its own invite sub-cap.
+    // es_invite also counts toward the shared send_invite cap (see inviteGroup).
+    es_lookup: { rampUp: 30, steady: 40 },
+    es_invite: { rampUp: 10, steady: 15 },
   } as Record<ActionType, { rampUp: number; steady: number }>,
+
+  /**
+   * Action types that send LinkedIn connection requests from the same account.
+   * Their combined daily total never exceeds the send_invite cap, and a
+   * backoff on one blocks the others.
+   */
+  inviteGroup: ["send_invite", "es_invite"] as const,
+
+  /** Elasticsearch invite pipeline (cold invites from the people index). */
+  es: {
+    /** Refill the local candidate queue when it drops below this. */
+    queueLowWater: 15,
+    /** Candidates fetched per Elasticsearch query. */
+    batchSize: 25,
+    /** Min minutes between refill attempts (success or failure). */
+    refillIntervalMinutes: 15,
+    /** Invite attempts before a candidate is given up on. */
+    maxInviteAttempts: 2,
+    /** Wait after a sent invite before the next ES invite (spreads ~15/day over the workday). */
+    inviteSpacingMinutes: { min: 20, max: 50 },
+    /** Wait after a lookup that ended in a skip (already connected, etc). */
+    skipSpacingMinutes: { min: 5, max: 15 },
+  },
 
   weeklyPostDays: [2, 4, 5] as const, // Tue, Thu, Fri (0=Sun)
 
@@ -49,6 +80,11 @@ export const LIMITS = {
     burstMaxActions: 7,
     burstPauseMinMs: 600_000,
     burstPauseMaxMs: 1_500_000,
+    /**
+     * Min gap between any two LinkedIn calls, across processes sharing the DB
+     * (main + ES containers use the same account).
+     */
+    minGapBetweenActionsMs: 40_000,
   },
 
   workingHours: {
@@ -131,10 +167,19 @@ export function getDailyCap(actionType: ActionType, accountAgeDays: number): num
   return Math.floor(base * multiplier);
 }
 
+export function isInviteAction(actionType: ActionType): boolean {
+  return (LIMITS.inviteGroup as readonly string[]).includes(actionType);
+}
+
+/** Action types whose backoff also blocks this one. */
+export function backoffKeysFor(actionType: ActionType): ActionType[] {
+  return isInviteAction(actionType) ? [...LIMITS.inviteGroup] : [actionType];
+}
+
 export function isPostDay(date: Date): boolean {
-  return (LIMITS.weeklyPostDays as readonly number[]).includes(date.getDay());
+  return (LIMITS.weeklyPostDays as readonly number[]).includes(getLocalWeekdayOf(date));
 }
 
 export function isProfileAuditDay(date: Date): boolean {
-  return date.getDay() === 1; // Monday
+  return getLocalWeekdayOf(date) === 1; // Monday
 }
