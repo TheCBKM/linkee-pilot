@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
-import { getDbPath } from "../config/env.js";
+import { getDbPath, getEnv } from "../config/env.js";
 import { ensureDbSchema } from "../db/migrate.js";
+import { JOB_STRONG_MATCH_SCORE } from "../config/jobs.js";
 import {
   type ActionType,
   getDailyCap,
@@ -19,7 +20,6 @@ import {
   CONNECTIONS_SYNC_COUNT_KEY,
 } from "../actions/sync-connections.js";
 import { getLocalDateString } from "../config/local-time.js";
-import { getEnv } from "../config/env.js";
 import { ES_NEXT_INVITE_AT_KEY } from "../actions/es-invite.js";
 
 /** Liveness from DB heartbeat: works across containers where PIDs aren't visible. */
@@ -81,6 +81,9 @@ function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
     "search",
     "profile_audit",
     "view_profile",
+    "discover_jobs",
+    "send_dm",
+    "dm_followup",
     "es_lookup",
     "es_invite",
   ];
@@ -349,6 +352,54 @@ export interface DashboardOverview {
     outreachSampleSize: number;
     minRelevanceThreshold: number;
   };
+  opportunities: {
+    total: number;
+    strong: number;
+    new7d: number;
+    applied: number;
+    strongThreshold: number;
+    jobDiscoveryEnabled: boolean;
+    items: {
+      id: number;
+      title: string;
+      company: string | null;
+      url: string | null;
+      location: string | null;
+      job_type: string | null;
+      role_family: string | null;
+      match_score: number;
+      match_reasons: string[];
+      match_gaps: string[];
+      pitch: string | null;
+      status: string;
+      posted_at: string | null;
+      discovered_at: string;
+    }[];
+  };
+  dms: {
+    dmEnabled: boolean;
+    pendingApproval: number;
+    sentTotal: number;
+    repliedTotal: number;
+    pending: {
+      id: number;
+      provider_id: string;
+      full_name: string | null;
+      headline: string | null;
+      kind: string;
+      draft_text: string;
+      created_at: string;
+    }[];
+    recent: {
+      id: number;
+      full_name: string | null;
+      kind: string;
+      status: string;
+      draft_text: string;
+      sent_at: string | null;
+      created_at: string;
+    }[];
+  };
 }
 
 const SEQUENCE_ORDER = [
@@ -360,7 +411,103 @@ const SEQUENCE_ORDER = [
   "invited",
   "withdrawn",
   "connected",
+  "messaged",
+  "replied",
 ] as const;
+
+function parseJsonArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function getOpportunities(
+  database: Database.Database
+): DashboardOverview["opportunities"] {
+  const one = (sql: string, ...params: unknown[]): number =>
+    (database.prepare(sql).get(...params) as { c: number }).c;
+
+  const rows = database
+    .prepare(
+      `SELECT id, title, company, url, location, job_type, role_family,
+              match_score, match_reasons, match_gaps, pitch, status,
+              posted_at, discovered_at
+       FROM opportunities
+       WHERE status NOT IN ('filtered', 'dismissed')
+       ORDER BY match_score DESC, discovered_at DESC
+       LIMIT 30`
+    )
+    .all() as (Omit<
+    DashboardOverview["opportunities"]["items"][number],
+    "match_reasons" | "match_gaps"
+  > & { match_reasons: string | null; match_gaps: string | null })[];
+
+  return {
+    total: one(
+      "SELECT COUNT(*) as c FROM opportunities WHERE status != 'filtered'"
+    ),
+    strong: one(
+      `SELECT COUNT(*) as c FROM opportunities
+       WHERE status NOT IN ('filtered','dismissed') AND match_score >= ?`,
+      JOB_STRONG_MATCH_SCORE
+    ),
+    new7d: one(
+      `SELECT COUNT(*) as c FROM opportunities
+       WHERE status != 'filtered' AND discovered_at >= datetime('now', '-7 days')`
+    ),
+    applied: one(
+      "SELECT COUNT(*) as c FROM opportunities WHERE status = 'applied'"
+    ),
+    strongThreshold: JOB_STRONG_MATCH_SCORE,
+    jobDiscoveryEnabled: getEnv().ENABLE_JOB_DISCOVERY,
+    items: rows.map((r) => ({
+      ...r,
+      match_reasons: parseJsonArray(r.match_reasons),
+      match_gaps: parseJsonArray(r.match_gaps),
+    })),
+  };
+}
+
+function getDms(database: Database.Database): DashboardOverview["dms"] {
+  const one = (sql: string, ...params: unknown[]): number =>
+    (database.prepare(sql).get(...params) as { c: number }).c;
+
+  const pending = database
+    .prepare(
+      `SELECT id, provider_id, full_name, headline, kind, draft_text, created_at
+       FROM dm_queue WHERE status = 'pending_approval'
+       ORDER BY created_at ASC LIMIT 20`
+    )
+    .all() as DashboardOverview["dms"]["pending"];
+
+  const recent = database
+    .prepare(
+      `SELECT id, full_name, kind, status, draft_text, sent_at, created_at
+       FROM dm_queue WHERE status IN ('sent', 'rejected', 'failed')
+       ORDER BY COALESCE(sent_at, created_at) DESC LIMIT 20`
+    )
+    .all() as DashboardOverview["dms"]["recent"];
+
+  return {
+    dmEnabled: getEnv().ENABLE_DM,
+    pendingApproval: one(
+      "SELECT COUNT(*) as c FROM dm_queue WHERE status = 'pending_approval'"
+    ),
+    sentTotal: one("SELECT COUNT(*) as c FROM dm_queue WHERE status = 'sent'"),
+    repliedTotal: one(
+      `SELECT COUNT(*) as c FROM targets
+       WHERE target_type = 'person' AND sequence_stage = 'replied'`
+    ),
+    pending,
+    recent,
+  };
+}
 
 export function getDashboardOverview(): DashboardOverview {
   const database = getReadOnlyDb();
@@ -623,6 +770,8 @@ export function getDashboardOverview(): DashboardOverview {
     esPipeline: getEsPipelineOverview(database),
     postHealth: getPostHealth(database),
     icpQuality: getIcpQuality(database),
+    opportunities: getOpportunities(database),
+    dms: getDms(database),
   };
 }
 

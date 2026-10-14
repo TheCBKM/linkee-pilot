@@ -803,6 +803,157 @@ td.preview {
   font-weight: 650;
 }
 
+.score-mid {
+  color: var(--warning);
+  font-weight: 650;
+}
+
+.score-low {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.btn-sm {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Opportunities */
+
+.opportunity-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.opportunity-score {
+  font-family: var(--mono);
+  font-size: 1.125rem;
+  min-width: 2.5rem;
+  text-align: center;
+  padding: 0.2rem 0.4rem;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.opportunity-title {
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+.opportunity-title a {
+  color: var(--accent);
+}
+
+.opportunity-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0.15rem 0 0;
+  font-family: var(--mono);
+}
+
+.opportunity-label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0.5rem 0 0.15rem;
+}
+
+.opportunity-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8125rem;
+}
+
+.opportunity-gaps {
+  color: var(--warning);
+}
+
+.opportunity-pitch {
+  font-size: 0.8125rem;
+  font-style: italic;
+  color: var(--text);
+  background: var(--surface);
+  border-left: 3px solid var(--border-strong);
+  padding: 0.5rem 0.7rem;
+  margin: 0.6rem 0 0;
+}
+
+.opportunity-actions,
+.dm-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.opportunity-date,
+.dm-date {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* DM approvals */
+
+.dm-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.dm-name {
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+.dm-headline {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0.15rem 0 0;
+}
+
+.dm-draft {
+  width: 100%;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  resize: vertical;
+}
+
+.dm-draft:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.result-sent {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(15, 123, 74, 0.28);
+}
+
+.result-rejected {
+  color: var(--muted);
+  background: var(--surface-muted);
+}
+
 .dash-footer {
   margin-top: 1rem;
   padding-top: 1.25rem;

@@ -13,9 +13,10 @@ export async function draftComment(params: {
 - Add genuine insight or a thoughtful question
 - Reference a specific point from the post
 - No links, no self-promotion, no "DM me", no generic praise
-- Match the builder/innovator voice
+- If the post is a job or hiring post, react to the technical substance only. NEVER say you are interested, available, applying, or ask them to consider you. Public begging kills the lead
+- Match the working-engineer voice
 - Sound human, not AI-generated:
-  - Write like you typed this between meetings: casual, direct, a little imperfect
+  - Write like you typed this between builds: casual, direct, a little imperfect
   - Vary sentence length; one short sentence is fine
   - Use contractions naturally (it's, we're, don't) when they fit
   - No buzzwords (leverage, delve, landscape, game-changer, robust, synergy)
@@ -61,9 +62,9 @@ export async function draftCommentReply(params: {
 - 1-2 sentences, max ${LIMITS.contentMaxLength.comment} characters
 - Acknowledge their specific point; continue the conversation naturally
 - No links, no self-promotion, no "DM me", no generic thanks-only replies
-- Match the builder/innovator voice
+- Match the working-engineer voice
 - Sound human, not AI-generated:
-  - Write like you typed this between meetings: casual, direct, a little imperfect
+  - Write like you typed this between builds: casual, direct, a little imperfect
   - Vary sentence length; one short sentence is fine
   - Use contractions naturally (it's, we're, don't) when they fit
   - No buzzwords (leverage, delve, landscape, game-changer, robust, synergy)
@@ -109,9 +110,10 @@ export async function draftInviteNote(params: {
   const system = systemPromptWithBrand(
     `Write a LinkedIn connection request note. Rules:
 - Max ${LIMITS.contentMaxLength.invite} characters
-- Personalized, mention shared interest in engineering productivity, agile workflows, or AI for dev teams
-- No links, no sales pitch, no "let's connect" clichés
-- Warm but professional
+- Personalized to their headline. Anchor on shared ground: AI agents in production, backend and platform engineering, or building remote engineering teams
+- If they clearly hire engineers, you may reference the kind of work they hire for. NEVER ask for a job, an interview, a referral, or say you are available. That comes later, in conversation
+- No links, no CV, no sales pitch, no "let's connect" clichés
+- Warm, brief, and professional. Sound like a peer, not an applicant
 - NEVER use em dashes (—), en dashes (–), or double-hyphen dashes (--). Use commas, periods, or a single hyphen.`
   );
 

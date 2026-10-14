@@ -47,11 +47,12 @@ async function draftTextPost(recentTrends?: string): Promise<PostDraft | null> {
 - 80-180 words (tight beats long essays)
 - ${trendRule}
 - No links, no hashtag spam, no self-promotion
-- Do not mention Scrummer by name or include a product CTA
+- Never mention that you are looking for work, open to roles, or available for contracts. The post earns credibility; it is not an ad
+- Never name a current employer or pitch a product
 - A closing question is optional. Never use a generic "thoughts?", "agree?", or repeated "curious how you handle X" CTA
 - NEVER use em dashes (—), en dashes (–), or double-hyphen dashes (--). Use commas, periods, or a single hyphen.
-- Share a CTO/builder perspective:
-  - Write like a busy CTO sharing a real observation, not a content marketer
+- Share a hands-on engineer's perspective:
+  - Write like a senior engineer sharing a real observation from the work, not a content marketer
   - Short paragraphs with line breaks; avoid bullet lists and numbered lists
   - Include one specific, concrete detail only when it is supplied by research or the selected pillar
   - Never invent customer stories, team experiments, dates, metrics, quotes, or phrases such as "last quarter we tried"
@@ -104,9 +105,9 @@ async function draftRepostCommentary(
 - 2-4 sentences, max 400 characters
 - Add a genuine insight or sharp question. Don't just agree
 - Reference a specific point from the original post
-- No links, no self-promotion, no "great post" openers
+- No links, no self-promotion, no availability pitch, no "great post" openers
 - NEVER use em dashes (—), en dashes (–), or double-hyphen dashes (--). Use commas, periods, or a single hyphen.
-- Sound like a CTO reacting between meetings`
+- Sound like a working engineer reacting between builds`
   );
 
   const user = `Original post by ${candidate.author_name ?? "someone"}:

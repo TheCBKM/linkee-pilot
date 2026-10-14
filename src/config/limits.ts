@@ -11,6 +11,9 @@ export type ActionType =
   | "search"
   | "profile_audit"
   | "view_profile"
+  | "discover_jobs"
+  | "send_dm"
+  | "dm_followup"
   | "es_lookup"
   | "es_invite";
 
@@ -32,6 +35,9 @@ export const LIMITS = {
     search: { rampUp: 40, steady: 80 },
     profile_audit: { rampUp: 1, steady: 1 },
     view_profile: { rampUp: 8, steady: 20 },
+    discover_jobs: { rampUp: 6, steady: 12 },
+    send_dm: { rampUp: 5, steady: 10 },
+    dm_followup: { rampUp: 3, steady: 8 },
     // ES pipeline: profile lookups before invite, and its own invite sub-cap.
     // es_invite also counts toward the shared send_invite cap (see inviteGroup).
     es_lookup: { rampUp: 30, steady: 40 },
@@ -102,6 +108,19 @@ export const LIMITS = {
     comment: 250,
     invite: 300,
     commentApi: 1250,
+    dm: 450,
+  },
+
+  /**
+   * Approval-gated DM outreach to accepted connections.
+   */
+  dm: {
+    /** Wait this long after an accept before drafting, so it reads human. */
+    minHoursSinceAccept: 18,
+    /** Past this, the accept is cold and a first-touch DM looks odd. */
+    maxDaysSinceAccept: 30,
+    /** Stop drafting once this many drafts are awaiting review. */
+    maxPendingApprovals: 8,
   },
 
   reactionMix: {

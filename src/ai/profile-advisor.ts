@@ -19,20 +19,32 @@ export async function runProfileAudit(): Promise<ProfileSuggestions | null> {
     const about = (profile.summary ?? profile.about ?? "") as string;
 
     const system = systemPromptWithBrand(
-      `You are a LinkedIn profile optimization advisor.
+      `You are a LinkedIn profile optimization advisor for someone searching for
+remote engineering roles and freelance contracts. Optimize for two readers:
+a technical recruiter running keyword searches, and a hiring manager or founder
+skimming for evidence of shipped work.
+
+Guidance:
+- Headline must front-load the searchable role keywords a recruiter would type
+  (AI Engineer, LLM, Backend, Platform, DevOps) plus a remote signal
+- About section leads with concrete shipped systems and scale, not adjectives
+- State remote availability plainly once. Never sound desperate
+- Suggest keywords that are currently missing from the profile entirely
+
 Return JSON only:
 {
   "headlineVariants": ["option1", "option2", "option3"],
   "aboutRewrite": "full about section rewrite",
-  "analysis": "brief analysis of current profile vs brand goal"
+  "analysis": "brief analysis of current profile vs the job and freelance search goal, including missing recruiter search keywords"
 }
-Do not auto-apply changes — suggestions only.`
+Do not auto-apply changes, suggestions only.`
     );
 
     const user = `Current headline: ${headline || "(empty)"}
 Current about: ${about || "(empty)"}
 
-Suggest improvements aligned with the brand goal.`;
+Suggest improvements that make this profile findable and convincing for remote
+senior AI, backend, and engineering-leadership roles, plus freelance contracts.`;
 
     const response = await chatCompletion({
       system,

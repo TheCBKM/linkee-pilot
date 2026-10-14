@@ -58,8 +58,9 @@
       <p class="docs-eyebrow">Technical reference</p>
       <h1>How the agent works</h1>
       <p class="docs-lead">
-        A continuous LinkedIn daemon — not cron jobs. One action at a time,
-        human-like delays, warm outreach sequences, network nurture, and a full SQLite audit trail.
+        A continuous LinkedIn daemon — not cron jobs. Remote job discovery, warm
+        outreach to people who hire, approval-gated DMs, one action at a time,
+        human-like delays, and a full SQLite audit trail.
       </p>
     </header>
 
@@ -67,12 +68,21 @@
     <section id="overview" class="docs-section">
       <h2>Overview</h2>
       <p>
-        The agent researches ICP-aligned people and posts via Unipile, engages
+        The agent runs a remote job and freelance search. It discovers remote job
+        listings and scores them against your profile, researches the people who
+        can hire you (recruiters, hiring managers, founders), engages
         (like / comment / view), sends connection invites only after a warm-up
-        sequence, and publishes thought-leadership posts on Tue / Thu / Fri.
-        Every mutating call goes through a rate limiter with daily quotas,
-        burst pauses, and backoff.
+        sequence, drafts a soft DM for your approval once they accept, and
+        publishes proof-of-work posts on Tue / Thu / Fri. Every mutating call goes
+        through a rate limiter with daily quotas, burst pauses, and backoff.
       </p>
+
+      <div class="callout">
+        <strong>Remote only, and DMs need your approval.</strong>
+        Job search hard-codes <code>presence: ["remote"]</code>, and hiring posts
+        without a remote signal are rejected. No DM is ever sent until you approve
+        it in the dashboard or via <code>dm approve</code>.
+      </div>
 
       <div class="callout">
         <strong>No OS crons.</strong>
@@ -94,7 +104,7 @@
         <div class="layer-card">
           <span class="layer-num">03</span>
           <h3>Actions</h3>
-          <p>Like, comment, reply, view, invite, withdraw, sync, post, research</p>
+          <p>Like, comment, reply, view, invite, withdraw, sync, post, research, job discovery, DM</p>
         </div>
         <div class="layer-card">
           <span class="layer-num">04</span>
@@ -109,7 +119,7 @@
         <div class="layer-card">
           <span class="layer-num">06</span>
           <h3>SQLite + Dashboard</h3>
-          <p>Audit trail and read-only UI</p>
+          <p>Audit trail, opportunity review, DM approval</p>
         </div>
         <div class="layer-card">
           <span class="layer-num">07</span>
@@ -123,8 +133,11 @@
     <section id="architecture" class="docs-section">
       <h2>Architecture</h2>
       <p>
-        The daemon owns the write path. The dashboard opens SQLite in readonly
-        mode and never controls the agent.
+        The daemon owns the LinkedIn write path. The dashboard reads SQLite in
+        readonly mode and never controls the agent; its only writes are your DM
+        approvals and opportunity status changes. These routes are
+        unauthenticated, so keep the dashboard port private at the network
+        layer.
       </p>
 
       <div class="diagram-wrap">
@@ -551,8 +564,23 @@ flowchart TD
               <td>new <code>discovered</code> targets</td>
             </tr>
             <tr>
+              <td><code>discover_jobs</code></td>
+              <td>Remote-only jobs search → dedupe (45d) → AI fit score → <code>opportunities</code>; Discord ping at ≥78</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code>send_dm</code></td>
+              <td>Sends the oldest approved draft, else drafts a soft first touch into <code>dm_queue</code> as <code>pending_approval</code></td>
+              <td>→ <code>messaged</code> (on send only)</td>
+            </tr>
+            <tr>
+              <td><code>dm_followup</code></td>
+              <td>Reads sent threads for inbound replies, queues a follow-up draft for approval</td>
+              <td>→ <code>replied</code></td>
+            </tr>
+            <tr>
               <td><code>profile_audit</code></td>
-              <td>Monday AI suggestions (no auto-apply)</td>
+              <td>Monday AI suggestions optimized for recruiter search keywords (no auto-apply)</td>
               <td>—</td>
             </tr>
           </tbody>
@@ -569,7 +597,11 @@ flowchart TD
         <code>icp-filter.ts</code>
         <span>Title / geo / exclude + engagement gate</span>
         <code>target-scorer.ts</code>
-        <span>OpenAI 0–100 relevance JSON</span>
+        <span>OpenAI 0–100 relevance JSON, weighted toward people who can hire</span>
+        <code>job-matcher.ts</code>
+        <span>Job fit 0–100 with reasons, gaps, and a tailored pitch; caps non-remote at 35</span>
+        <code>dm-writer.ts</code>
+        <span>Soft first touch (no ask) and reply follow-ups</span>
         <code>comment-writer.ts</code>
         <span>Comments, invite notes, own-post replies</span>
         <code>post-writer.ts</code>
@@ -588,10 +620,12 @@ flowchart TD
 
       <h3>ICP filter highlights</h3>
       <ul class="docs-list">
-        <li>Exclude recruiters, coaches, spam title patterns</li>
-        <li>Exclude India / South Asia locations; prefer US, Europe, UK, Canada, AU, RU</li>
+        <li>Include recruiters, talent acquisition, hiring managers, engineering leaders, founders, and agency owners: the people who can hire or buy contract work</li>
+        <li>Exclude career coaches, resume writers, personal-brand accounts, and fellow job seekers (peers, not buyers)</li>
+        <li>Prefer US, Europe, UK, Canada, AU, RU, India; exclude Pakistan, Bangladesh, Sri Lanka, Nepal. Remote is required regardless of geography</li>
         <li>People must match include title patterns</li>
         <li>Posts: unless &lt;6h old, need <code>reactions + 2×comments ≥ 5</code></li>
+        <li><strong>Hiring-signal fast path:</strong> posts matching <code>HIRING_SIGNAL_PATTERNS</code> bypass the traction gate, since a fresh "we're hiring" post has almost no reactions. They must carry a remote signal, and a hiring post without one is rejected outright</li>
         <li>Keep discoveries with relevance score ≥ <strong>75</strong>; engage preferred ≥ <strong>80</strong></li>
         <li>Nurture network posts skip ICP/AI and use fixed relevance <strong>88</strong></li>
       </ul>
@@ -630,6 +664,9 @@ flowchart TD
             <tr><td>withdraw_invite</td><td>5</td><td>20</td></tr>
             <tr><td>view_profile</td><td>4</td><td>20</td></tr>
             <tr><td>search</td><td>20</td><td>80</td></tr>
+            <tr><td>discover_jobs</td><td>3</td><td>12</td></tr>
+            <tr><td>send_dm</td><td>2</td><td>10</td></tr>
+            <tr><td>dm_followup</td><td>1</td><td>8</td></tr>
             <tr><td>create_post</td><td colspan="2">1 on Tue/Thu/Fri only</td></tr>
             <tr><td>profile_audit</td><td colspan="2">1 on Monday only</td></tr>
             <tr><td>sync_connections</td><td colspan="2">Quota-free · max 3 syncs/day after backfill</td></tr>
@@ -672,6 +709,10 @@ flowchart TD
           </thead>
           <tbody>
             <tr><td>Agent started / stopped</td><td>info</td></tr>
+            <tr><td>Strong job match (score ≥ 78)</td><td>info</td></tr>
+            <tr><td>DM draft awaiting your approval</td><td>warn</td></tr>
+            <tr><td>DM sent after approval</td><td>info</td></tr>
+            <tr><td>Reply received, follow-up drafted</td><td>warn</td></tr>
             <tr><td>Research finished (target count)</td><td>info</td></tr>
             <tr><td>Post published / draft failed</td><td>info / warn</td></tr>
             <tr><td>Connection accepts detected</td><td>info</td></tr>
@@ -694,6 +735,7 @@ flowchart TD
         <pre class="mermaid">
 erDiagram
   ACTIONS ||--o{ TARGETS : "may reference"
+  CONNECTIONS ||--o{ DM_QUEUE : "drafted for"
   TARGETS {
     string type "post | person"
     string status "pending | engaged | filtered | invited | withdrawn | connected"
@@ -705,6 +747,21 @@ erDiagram
     string provider_id
     string accepted_at
     int from_invite
+  }
+  OPPORTUNITIES {
+    string job_id
+    string title
+    string presence "remote only"
+    int match_score
+    string pitch
+    string status "new | filtered | shortlisted | applied | dismissed"
+  }
+  DM_QUEUE {
+    string provider_id
+    string kind "first_touch | followup"
+    string draft_text
+    string status "pending_approval | approved | rejected | sent | failed"
+    string chat_id
   }
   ACTIONS {
     string action_type
@@ -732,6 +789,8 @@ erDiagram
         <li><strong>actions</strong> — full audit log</li>
         <li><strong>targets</strong> — posts &amp; people in the pipeline (nurture posts flagged in metadata)</li>
         <li><strong>connections</strong> — synced first-degree relations + accept timestamps</li>
+        <li><strong>opportunities</strong> — scored remote job and contract listings, with fit reasons, gaps, and pitch</li>
+        <li><strong>dm_queue</strong> — outbound DM drafts and their approval state; also the ledger of who has already been considered</li>
         <li><strong>posts</strong> — published content</li>
         <li><strong>quota_usage</strong> — daily counters</li>
         <li><strong>agent_state</strong> — heartbeat, halt, <code>post_boost_until</code>, connection sync schedule</li>
@@ -745,7 +804,7 @@ erDiagram
 
       <h3>External services</h3>
       <ul class="docs-list">
-        <li><strong>Unipile</strong> — LinkedIn search, reactions, comments, invites, posts, profile views, relations sync</li>
+        <li><strong>Unipile</strong> — LinkedIn search (posts, people, jobs), reactions, comments, invites, posts, profile views, relations sync, messaging</li>
         <li><strong>OpenAI</strong> — scoring, drafts, moderation (default model <code>gpt-4.1</code>)</li>
       </ul>
 
@@ -762,6 +821,10 @@ erDiagram
             <tr><td><code>npm run agent:status</code></td><td>Process + quotas</td></tr>
             <tr><td><code>npm run dry-run</code></td><td>AI runs, no LinkedIn writes</td></tr>
             <tr><td><code>npm run dashboard</code></td><td>UI at http://127.0.0.1:3847</td></tr>
+            <tr><td><code>npx tsx src/cli/index.ts jobs</code></td><td>List scored remote opportunities</td></tr>
+            <tr><td><code>npx tsx src/cli/index.ts dm list</code></td><td>Drafts awaiting approval</td></tr>
+            <tr><td><code>npx tsx src/cli/index.ts dm approve &lt;id&gt;</code></td><td>Approve a draft (<code>--text</code> to rewrite)</td></tr>
+            <tr><td><code>npx tsx src/cli/index.ts dm reject &lt;id&gt;</code></td><td>Reject a draft permanently</td></tr>
           </tbody>
         </table>
       </div>
@@ -773,6 +836,9 @@ erDiagram
         <code>DISCORD_WEBHOOK_URL</code> (optional),
         <code>DASHBOARD_HOST</code> (default 127.0.0.1),
         <code>DASHBOARD_PORT</code> (default 3847),
+        <code>ENABLE_JOB_DISCOVERY</code> (default true),
+        <code>ENABLE_DM</code> (default <strong>false</strong>),
+        <code>PORTFOLIO_URL</code>, <code>RESUME_URL</code>,
         plus Unipile and OpenAI keys.
       </div>
 
@@ -780,21 +846,30 @@ erDiagram
       <div class="diagram-wrap">
         <pre class="mermaid">
 flowchart LR
-  U[Unipile search] --> F[ICP filter]
+  J[Unipile jobs search] --> M[OpenAI fit score]
+  M --> O[(opportunities)]
+  U[Unipile people/posts search] --> F[ICP filter]
   F --> S[OpenAI score]
   S --> T[(targets)]
   T --> Sch[scheduler]
   Sch --> Draft[AI draft]
   Draft --> Saf[safety]
   Saf --> W[Unipile write]
+  W --> Acc[accepted connection]
+  Acc --> DD[soft DM draft]
+  DD --> Q[(dm_queue pending_approval)]
+  Q --> You[you approve]
+  You --> Send[Unipile DM]
   W --> Log[(actions + quotas)]
-  Log --> Dash[Dashboard]
+  Send --> Log
+  O --> Dash[Dashboard]
+  Log --> Dash
         </pre>
       </div>
     </section>
 
     <footer class="docs-footer">
-      <p>LinkedIn Profile Enhancer · read-only docs served from the dashboard · <a href="/">Back to dashboard</a></p>
+      <p>LinkedIn Profile Enhancer · docs served from the dashboard · <a href="/">Back to dashboard</a></p>
     </footer>
   </main>
 

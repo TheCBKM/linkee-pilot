@@ -249,6 +249,7 @@ export async function runResearch(): Promise<DiscoveredTarget[]> {
         const icp = passesIcpFilter({
           targetType: parsed.target_type,
           headline: parsed.author_headline,
+          authorName: parsed.author_name,
           content: parsed.content_preview,
           location: parsed.location,
           reactionCount: parsed.reaction_count,
@@ -444,6 +445,22 @@ export function resolvePostSocialId(target: {
   }
 
   return normalizeLinkedInPostId(target.social_id ?? target.target_id);
+}
+
+/**
+ * LinkedIn group posts cannot be commented on through Unipile: the API rejects
+ * both the activity URN and the groupPost URN with `errors/invalid_post`. The
+ * activity id we store does not match the group post id, and only the
+ * `share_url` reveals the difference, so detect it there.
+ */
+export function isGroupPost(target: { metadata?: string | null }): boolean {
+  if (!target.metadata) return false;
+  try {
+    const parsed = JSON.parse(target.metadata) as { share_url?: unknown };
+    return String(parsed.share_url ?? "").includes("urn:li:groupPost:");
+  } catch {
+    return false;
+  }
 }
 
 /** Normalize LinkedIn post ids to a Unipile-friendly URN when possible. */

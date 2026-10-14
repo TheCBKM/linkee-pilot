@@ -17,6 +17,9 @@ const ACTION_LABELS = {
   create_post: "Publish post",
   search: "Research",
   profile_audit: "Profile audit",
+  discover_jobs: "Job discovery",
+  send_dm: "DM",
+  dm_followup: "DM follow-up",
   es_lookup: "ES profile lookup",
   es_invite: "ES invite",
   es_refill: "ES queue refill",
@@ -31,10 +34,13 @@ const STAGE_LABELS = {
   invited: "Invited",
   withdrawn: "Withdrawn",
   connected: "Connected",
+  messaged: "Messaged",
+  replied: "Replied",
 };
 
 const QUOTA_ORDER = [
   "search",
+  "discover_jobs",
   "like_post",
   "comment_post",
   "reply_comment",
@@ -44,8 +50,16 @@ const QUOTA_ORDER = [
   "es_lookup",
   "es_invite",
   "withdraw_invite",
+  "send_dm",
+  "dm_followup",
   "create_post",
   "profile_audit",
+];
+
+const OPPORTUNITY_ACTIONS = [
+  { status: "shortlisted", label: "Shortlist" },
+  { status: "applied", label: "Applied" },
+  { status: "dismissed", label: "Dismiss" },
 ];
 
 function relativeTime(iso) {
@@ -332,6 +346,204 @@ function renderInviteReady(people, total) {
       </tr>
     `)
     .join("");
+}
+
+function scoreClass(score) {
+  if (score >= 85) return "score-high";
+  if (score >= 70) return "score-mid";
+  return "score-low";
+}
+
+function renderOpportunities(opps) {
+  const data = opps ?? {};
+  const items = data.items ?? [];
+
+  document.getElementById("stat-opp-strong").textContent = data.strong ?? 0;
+  document.getElementById("stat-opp-threshold").textContent =
+    data.strongThreshold ? `score ≥ ${data.strongThreshold}` : "";
+  document.getElementById("stat-opp-new").textContent = data.new7d ?? 0;
+  document.getElementById("stat-opp-total").textContent = data.total ?? 0;
+  document.getElementById("stat-opp-applied").textContent = data.applied ?? 0;
+  document.getElementById("stat-opp-enabled").textContent =
+    data.jobDiscoveryEnabled ? "On" : "Off";
+
+  const list = document.getElementById("opportunities-list");
+  const noData = document.getElementById("no-opportunities");
+
+  if (items.length === 0) {
+    list.innerHTML = "";
+    noData.classList.remove("hidden");
+    return;
+  }
+  noData.classList.add("hidden");
+
+  list.innerHTML = items
+    .map((o) => {
+      const title = o.url
+        ? `<a href="${escapeHtml(o.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.title)}</a>`
+        : escapeHtml(o.title);
+      const meta = [o.company, o.location, o.job_type, o.role_family]
+        .filter(Boolean)
+        .map((v) => escapeHtml(String(v)))
+        .join(" · ");
+      const reasons = (o.match_reasons ?? [])
+        .map((r) => `<li>${escapeHtml(r)}</li>`)
+        .join("");
+      const gaps = (o.match_gaps ?? [])
+        .map((g) => `<li>${escapeHtml(g)}</li>`)
+        .join("");
+      const buttons = OPPORTUNITY_ACTIONS.filter((a) => a.status !== o.status)
+        .map(
+          (a) =>
+            `<button type="button" class="btn btn-sm" data-opp-id="${o.id}" data-opp-status="${a.status}">${a.label}</button>`
+        )
+        .join("");
+
+      return `
+        <article class="post-item opportunity-item">
+          <div class="opportunity-head">
+            <span class="opportunity-score ${scoreClass(o.match_score)}">${o.match_score}</span>
+            <div>
+              <h3 class="opportunity-title">${title}</h3>
+              <p class="opportunity-meta">${meta || "—"}</p>
+            </div>
+            <span class="source-badge">${escapeHtml(o.status)}</span>
+          </div>
+          ${reasons ? `<p class="opportunity-label">Fit</p><ul class="opportunity-list">${reasons}</ul>` : ""}
+          ${gaps ? `<p class="opportunity-label">Gaps</p><ul class="opportunity-list opportunity-gaps">${gaps}</ul>` : ""}
+          ${o.pitch ? `<p class="opportunity-pitch">${escapeHtml(o.pitch)}</p>` : ""}
+          <div class="opportunity-actions">
+            ${buttons}
+            <span class="opportunity-date">${relativeTime(o.discovered_at)}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderDms(dms) {
+  const data = dms ?? {};
+
+  document.getElementById("stat-dm-pending").textContent =
+    data.pendingApproval ?? 0;
+  document.getElementById("stat-dm-sent").textContent = data.sentTotal ?? 0;
+  document.getElementById("stat-dm-replied").textContent =
+    data.repliedTotal ?? 0;
+  document.getElementById("stat-dm-enabled").textContent = data.dmEnabled
+    ? "On"
+    : "Off";
+
+  const pending = data.pending ?? [];
+  const list = document.getElementById("dm-pending-list");
+  const noPending = document.getElementById("no-dm-pending");
+  const panel = document.getElementById("dm-approvals-panel");
+
+  if (pending.length === 0) {
+    list.innerHTML = "";
+    noPending.classList.remove("hidden");
+    panel.classList.remove("panel-active");
+  } else {
+    noPending.classList.add("hidden");
+    panel.classList.add("panel-active");
+    list.innerHTML = pending
+      .map(
+        (d) => `
+        <article class="post-item dm-item" data-dm-row="${d.id}">
+          <div class="dm-head">
+            <div>
+              <h3 class="dm-name">${escapeHtml(d.full_name ?? d.provider_id)}</h3>
+              <p class="dm-headline">${escapeHtml(d.headline ?? "—")}</p>
+            </div>
+            <span class="source-badge">${escapeHtml(d.kind)}</span>
+          </div>
+          <label class="sr-only" for="dm-text-${d.id}">Draft message</label>
+          <textarea class="dm-draft" id="dm-text-${d.id}" rows="4">${escapeHtml(d.draft_text)}</textarea>
+          <div class="dm-actions">
+            <button type="button" class="btn btn-primary btn-sm" data-dm-id="${d.id}" data-dm-action="approve">Approve and send</button>
+            <button type="button" class="btn btn-sm" data-dm-id="${d.id}" data-dm-action="reject">Reject</button>
+            <span class="dm-date">queued ${relativeTime(d.created_at)}</span>
+          </div>
+        </article>
+      `
+      )
+      .join("");
+  }
+
+  const history = data.recent ?? [];
+  const tbody = document.getElementById("dm-history-body");
+  const noHistory = document.getElementById("no-dm-history");
+
+  if (history.length === 0) {
+    tbody.innerHTML = "";
+    noHistory.classList.remove("hidden");
+    return;
+  }
+  noHistory.classList.add("hidden");
+  tbody.innerHTML = history
+    .map(
+      (d) => `
+      <tr>
+        <td>${relativeTime(d.sent_at ?? d.created_at)}</td>
+        <td>${escapeHtml(truncate(d.full_name ?? "—", 24))}</td>
+        <td>${escapeHtml(d.kind)}</td>
+        <td><span class="result-badge result-${escapeHtml(d.status)}">${escapeHtml(d.status)}</span></td>
+        <td class="preview" title="${escapeHtml(d.draft_text)}">${escapeHtml(truncate(d.draft_text, 70))}</td>
+      </tr>
+    `
+    )
+    .join("");
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+function setupActionHandlers() {
+  document.addEventListener("click", async (event) => {
+    const dmButton = event.target.closest("[data-dm-action]");
+    if (dmButton) {
+      const id = dmButton.dataset.dmId;
+      const action = dmButton.dataset.dmAction;
+      const textarea = document.getElementById(`dm-text-${id}`);
+
+      if (action === "reject" && !confirm("Reject this draft?")) return;
+
+      dmButton.disabled = true;
+      try {
+        await postJson(
+          `/api/dm/${id}/${action}`,
+          action === "approve" && textarea ? { text: textarea.value } : {}
+        );
+        await fetchOverview();
+      } catch (err) {
+        dmButton.disabled = false;
+        showError(`DM ${action} failed: ${err.message}`, true);
+      }
+      return;
+    }
+
+    const oppButton = event.target.closest("[data-opp-status]");
+    if (oppButton) {
+      oppButton.disabled = true;
+      try {
+        await postJson(`/api/opportunity/${oppButton.dataset.oppId}/status`, {
+          status: oppButton.dataset.oppStatus,
+        });
+        await fetchOverview();
+      } catch (err) {
+        oppButton.disabled = false;
+        showError(`Update failed: ${err.message}`, true);
+      }
+    }
+  });
 }
 
 function renderQuotas(quotas) {
@@ -665,6 +877,8 @@ function renderEsPipeline(es) {
 
 function render(data) {
   renderStatusCards(data);
+  renderOpportunities(data.opportunities);
+  renderDms(data.dms);
   renderEsPipeline(data.esPipeline);
   renderOutreachStats(data.outreach);
   renderNurtureStats(data.nurture);
@@ -757,5 +971,6 @@ document.addEventListener("visibilitychange", () => {
 });
 
 setupSectionNav();
+setupActionHandlers();
 fetchOverview();
 startPolling();

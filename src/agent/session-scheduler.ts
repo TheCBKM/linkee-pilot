@@ -1,4 +1,5 @@
 import type { ActionType } from "../config/limits.js";
+import { getEnv } from "../config/env.js";
 import { isPostDay, isProfileAuditDay, LIMITS } from "../config/limits.js";
 import {
   getAgentState,
@@ -18,12 +19,12 @@ import { WITHDRAW_INVITE_IDLE_DATE_KEY } from "../actions/withdraw-invite.js";
 import { shouldSyncConnections } from "../actions/sync-connections.js";
 import { shouldRefillEsQueue } from "../actions/es-refill.js";
 import { hasEsInviteWork } from "../actions/es-invite.js";
-import { getEnv } from "../config/env.js";
 import { isMainAgentAlive } from "./lifecycle.js";
 import { getLocalDateString } from "../config/local-time.js";
 
 export type ScheduledAction =
   | { type: "research" }
+  | { type: "discover_jobs" }
   | { type: "like_post"; target: Target }
   | { type: "like_comment"; target: Target }
   | { type: "comment_post"; target: Target }
@@ -34,6 +35,8 @@ export type ScheduledAction =
   | { type: "withdraw_invite" }
   | { type: "sync_connections" }
   | { type: "view_profile"; target: Target }
+  | { type: "send_dm" }
+  | { type: "dm_followup" }
   | { type: "create_post" }
   | { type: "profile_audit" }
   | { type: "sleep"; reason: string; ms: number }
@@ -143,6 +146,20 @@ function buildEligibleCandidates(
       continue;
     }
 
+    if (actionType === "discover_jobs") {
+      if (!getEnv().ENABLE_JOB_DISCOVERY) continue;
+      candidates.push({ type: "discover_jobs" });
+      weights.push(weight);
+      continue;
+    }
+
+    if (actionType === "send_dm" || actionType === "dm_followup") {
+      if (!getEnv().ENABLE_DM) continue;
+      candidates.push({ type: actionType });
+      weights.push(weight);
+      continue;
+    }
+
     if (actionType === "reply_comment") {
       if (!hasRecentOwnPosts(LIMITS.ownPostReplyWindowHours)) continue;
       candidates.push({ type: "reply_comment" });
@@ -223,10 +240,13 @@ function getWeightsForWindow(
   }
 
   switch (window) {
+    // Fresh job posts land overnight, so lead the day with discovery.
     case "morning":
       return [
-        { actionType: "reply_comment", weight: 4 },
+        { actionType: "discover_jobs", weight: 4 },
+        { actionType: "reply_comment", weight: 3 },
         { actionType: "search", weight: 3 },
+        { actionType: "dm_followup", weight: 2 },
         { actionType: "like_post", weight: 2 },
         { actionType: "comment_post", weight: 2 },
         { actionType: "es_invite", weight: 2 },
@@ -235,17 +255,22 @@ function getWeightsForWindow(
       return [
         { actionType: "reply_comment", weight: 4 },
         { actionType: "comment_post", weight: 3 },
+        { actionType: "send_dm", weight: 3 },
+        { actionType: "dm_followup", weight: 2 },
         { actionType: "like_comment", weight: 2 },
         { actionType: "like_post", weight: 2 },
+        { actionType: "discover_jobs", weight: 1 },
         { actionType: "es_invite", weight: 2 },
       ];
     case "afternoon":
       return [
         { actionType: "view_profile", weight: 3 },
         { actionType: "send_invite", weight: 3 },
+        { actionType: "send_dm", weight: 3 },
         { actionType: "like_post", weight: 2 },
         { actionType: "search", weight: 2 },
         { actionType: "reply_comment", weight: 2 },
+        { actionType: "dm_followup", weight: 1 },
         { actionType: "es_invite", weight: 3 },
       ];
     case "late_afternoon":
@@ -255,6 +280,8 @@ function getWeightsForWindow(
         { actionType: "comment_post", weight: 2 },
         { actionType: "view_profile", weight: 2 },
         { actionType: "like_comment", weight: 2 },
+        { actionType: "dm_followup", weight: 2 },
+        { actionType: "discover_jobs", weight: 1 },
         { actionType: "es_invite", weight: 2 },
       ];
     default:

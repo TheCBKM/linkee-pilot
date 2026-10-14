@@ -126,6 +126,57 @@ CREATE INDEX IF NOT EXISTS idx_connections_accepted
 CREATE INDEX IF NOT EXISTS idx_connections_engaged
   ON connections(last_engaged_at);
 
+-- Remote job / freelance opportunities discovered via LinkedIn jobs search
+CREATE TABLE IF NOT EXISTS opportunities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  company TEXT,
+  company_url TEXT,
+  url TEXT,
+  location TEXT,
+  presence TEXT,        -- remote | hybrid | on_site
+  job_type TEXT,        -- full_time | contract | part_time
+  role_family TEXT,     -- see src/config/jobs.ts
+  posted_at TEXT,
+  description TEXT,
+  match_score INTEGER DEFAULT 0,
+  match_reasons TEXT,   -- JSON array
+  match_gaps TEXT,      -- JSON array
+  pitch TEXT,
+  status TEXT NOT NULL DEFAULT 'new', -- new | filtered | shortlisted | applied | dismissed
+  notified INTEGER NOT NULL DEFAULT 0,
+  metadata TEXT,        -- JSON
+  discovered_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_opportunities_score
+  ON opportunities(status, match_score DESC);
+CREATE INDEX IF NOT EXISTS idx_opportunities_discovered
+  ON opportunities(discovered_at DESC);
+
+-- Approval-gated outbound DMs to accepted connections
+CREATE TABLE IF NOT EXISTS dm_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id TEXT NOT NULL,
+  full_name TEXT,
+  headline TEXT,
+  opportunity_id INTEGER,
+  kind TEXT NOT NULL DEFAULT 'first_touch', -- first_touch | followup
+  draft_text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+    -- pending_approval | approved | rejected | sent | failed
+  chat_id TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  approved_at TEXT,
+  sent_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_dm_queue_status
+  ON dm_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_dm_queue_provider
+  ON dm_queue(provider_id);
 -- Elasticsearch invite pipeline candidates (kept apart from warm-outreach targets)
 CREATE TABLE IF NOT EXISTS es_candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
