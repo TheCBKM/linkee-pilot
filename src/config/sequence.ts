@@ -7,6 +7,8 @@ export const SEQUENCE_STAGES = [
   "invited",
   "withdrawn",
   "connected",
+  "messaged",
+  "replied",
 ] as const;
 
 export type SequenceStage = (typeof SEQUENCE_STAGES)[number];
@@ -20,6 +22,8 @@ const STAGE_ORDER: Record<SequenceStage, number> = {
   invited: 5,
   withdrawn: 6,
   connected: 7,
+  messaged: 8,
+  replied: 9,
 };
 
 export function stageRank(stage: string | null | undefined): number {
@@ -52,9 +56,7 @@ export function checkInviteReady(params: {
 }): boolean {
   const stage = params.sequenceStage ?? "discovered";
   if (stage === "invite_ready") return true;
-  if (stage === "invited" || stage === "withdrawn" || stage === "connected") {
-    return false;
-  }
+  if (isStageAtLeast(stage, "invited")) return false;
 
   const touches = params.touches ?? {};
 

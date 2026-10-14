@@ -16,20 +16,55 @@ export function getAccountId(): string {
   return getEnv().UNIPILE_ACCOUNT_ID;
 }
 
+export type JobPresence = "remote" | "hybrid" | "on_site";
+
+export type JobType =
+  | "full_time"
+  | "part_time"
+  | "contract"
+  | "temporary"
+  | "volunteer"
+  | "internship"
+  | "other";
+
+export type JobSeniority =
+  | "executive"
+  | "director"
+  | "mid_senior"
+  | "associate"
+  | "entry"
+  | "intern";
+
 export interface LinkedInSearchParams {
   keywords?: string;
-  category: "posts" | "people";
+  category: "posts" | "people" | "jobs";
   limit?: number;
   cursor?: string;
   api?: "classic" | "sales_navigator" | "recruiter";
   sort_by?: string;
-  date_posted?: string;
+  /**
+   * Posts search expects a string enum ("past_week"); jobs search expects a
+   * number of days. Passing the wrong shape is a hard 400.
+   */
+  date_posted?: string | number;
   network_distance?: number[];
   profile_language?: string[];
   /** Classic people/company search: LinkedIn location geo IDs. */
   location?: string[];
-  /** Classic posts search: single global location geo ID. */
+  /**
+   * Single global location geo ID. Used by posts search, and the only
+   * geography filter that actually works for jobs search: passing `location`
+   * for a jobs query returns zero results.
+   */
   region?: string;
+  /** Jobs search only: LinkedIn "workplace type" filter. */
+  presence?: JobPresence[];
+  /** Jobs search only: LinkedIn "job type" filter. */
+  job_type?: JobType[];
+  /** Jobs search only: LinkedIn "experience level" filter. */
+  seniority?: JobSeniority[];
+  /** Jobs search only: LinkedIn industry geo-style IDs. */
+  industry?: string[];
 }
 
 export async function linkedinSearch(params: LinkedInSearchParams) {
@@ -46,11 +81,15 @@ export async function linkedinSearch(params: LinkedInSearchParams) {
 
   if (params.keywords) body.keywords = params.keywords;
   if (params.sort_by) body.sort_by = params.sort_by;
-  if (params.date_posted) body.date_posted = params.date_posted;
+  if (params.date_posted != null) body.date_posted = params.date_posted;
   if (params.network_distance) body.network_distance = params.network_distance;
   if (params.profile_language) body.profile_language = params.profile_language;
   if (params.location?.length) body.location = params.location;
   if (params.region) body.region = params.region;
+  if (params.presence?.length) body.presence = params.presence;
+  if (params.job_type?.length) body.job_type = params.job_type;
+  if (params.seniority?.length) body.seniority = params.seniority;
+  if (params.industry?.length) body.industry = params.industry;
 
   const response = await fetch(url.toString(), {
     method: "POST",
@@ -480,6 +519,193 @@ function extractPublicIdFromProfileUrl(
   if (!url) return null;
   const m = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
   return m?.[1] ? decodeURIComponent(m[1]) : null;
+}
+
+export interface JobPostingDetail {
+  id: string;
+  title?: string;
+  description?: string;
+  company?: string;
+  companyId?: string;
+  location?: string;
+  /** LinkedIn workplace type, e.g. "remote", "hybrid", "on_site". */
+  workplace?: string;
+  seniority?: string;
+  salary?: string;
+  skills?: string[];
+  applyUrl?: string;
+  applicantsCount?: number;
+  state?: string;
+  /** Recruiters and hiring managers attached to the posting. */
+  hiringTeam?: { name?: string; providerId?: string; profileUrl?: string }[];
+}
+
+/**
+ * Jobs search results carry no description, so fit scoring needs the detail
+ * endpoint. Returns null rather than throwing: a missing description should
+ * degrade the score, not abort the whole discovery run.
+ */
+export async function getJobPosting(
+  jobId: string
+): Promise<JobPostingDetail | null> {
+  const env = getEnv();
+  const url = new URL(`${env.UNIPILE_BASE_URL}/api/v1/linkedin/jobs/${jobId}`);
+  url.searchParams.set("account_id", env.UNIPILE_ACCOUNT_ID);
+  url.searchParams.set("service", "CLASSIC");
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "X-API-KEY": env.UNIPILE_API_KEY,
+        accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(
+        `[unipile] Job detail ${jobId} failed: ${response.status} ${response.statusText}`
+      );
+      return null;
+    }
+
+    const raw = (await response.json()) as Record<string, unknown>;
+    const text = (key: string): string | undefined => {
+      const value = raw[key];
+      return typeof value === "string" && value.trim() ? value.trim() : undefined;
+    };
+
+    const team = Array.isArray(raw.hiring_team)
+      ? (raw.hiring_team as Record<string, unknown>[]).map((m) => ({
+          name: typeof m.name === "string" ? m.name : undefined,
+          providerId: typeof m.id === "string" ? m.id : undefined,
+          profileUrl:
+            typeof m.profile_url === "string" ? m.profile_url : undefined,
+        }))
+      : undefined;
+
+    return {
+      id: text("id") ?? jobId,
+      title: text("title"),
+      description: text("description"),
+      company: text("company"),
+      companyId: text("company_id"),
+      location: text("location"),
+      workplace: text("workplace"),
+      seniority: text("seniority"),
+      salary: text("salary"),
+      skills: Array.isArray(raw.skills)
+        ? (raw.skills as unknown[]).filter(
+            (s): s is string => typeof s === "string"
+          )
+        : undefined,
+      applyUrl: text("apply_url"),
+      applicantsCount:
+        typeof raw.applicants_counter === "number"
+          ? raw.applicants_counter
+          : undefined,
+      state: text("state"),
+      hiringTeam: team,
+    };
+  } catch (err) {
+    console.warn(`[unipile] Job detail ${jobId} error:`, err);
+    return null;
+  }
+}
+
+// --- Direct messaging (1st-degree connections) ---
+
+export interface StartedChat {
+  chatId: string | null;
+  messageId: string | null;
+}
+
+/**
+ * Open a new LinkedIn conversation with a connection and send the first
+ * message. LinkedIn only permits this for 1st-degree connections without
+ * InMail credits, so callers must confirm the accept first.
+ */
+export async function startChat(params: {
+  providerId: string;
+  text: string;
+}): Promise<StartedChat> {
+  const text = assertPublishableContent(params.text);
+  const env = getEnv();
+  const sdk = getUnipileClient();
+
+  const response = await sdk.messaging.startNewChat({
+    account_id: env.UNIPILE_ACCOUNT_ID,
+    attendees_ids: [params.providerId],
+    text,
+  });
+
+  return {
+    chatId: response.chat_id ?? null,
+    messageId: response.message_id ?? null,
+  };
+}
+
+/** Send a follow-up into an existing chat. */
+export async function sendChatMessage(params: {
+  chatId: string;
+  text: string;
+}): Promise<{ messageId: string | null }> {
+  const text = assertPublishableContent(params.text);
+  const sdk = getUnipileClient();
+
+  const response = await sdk.messaging.sendMessage({
+    chat_id: params.chatId,
+    text,
+  });
+
+  return { messageId: response.message_id ?? null };
+}
+
+export interface ChatMessageSummary {
+  id: string;
+  text: string | null;
+  /** True when the account owner sent it. */
+  isOutbound: boolean;
+  timestamp: string | null;
+}
+
+/**
+ * Read a conversation, normalized down to what reply detection needs.
+ * Unipile marks own messages with is_sender = 1.
+ */
+export async function getChatMessages(
+  chatId: string,
+  limit = 20
+): Promise<ChatMessageSummary[]> {
+  const sdk = getUnipileClient();
+  const response = await sdk.messaging.getAllMessagesFromChat({
+    chat_id: chatId,
+    limit,
+  });
+
+  const items = (response.items ?? []) as Record<string, unknown>[];
+  return items.map((item) => ({
+    id: String(item.id ?? ""),
+    text: typeof item.text === "string" ? item.text : null,
+    isOutbound: item.is_sender === 1 || item.is_sender === true,
+    timestamp:
+      typeof item.timestamp === "string"
+        ? item.timestamp
+        : typeof item.created_at === "string"
+          ? item.created_at
+          : null,
+  }));
+}
+
+/** True when the other party has replied in this chat. */
+export async function hasInboundReply(chatId: string): Promise<boolean> {
+  try {
+    const messages = await getChatMessages(chatId, 20);
+    return messages.some((m) => !m.isOutbound);
+  } catch (err) {
+    console.warn(`[unipile] Reply check failed for chat ${chatId}:`, err);
+    return false;
+  }
 }
 
 export async function getPostComments(

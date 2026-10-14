@@ -1,14 +1,22 @@
 import {
+  hasHiringSignal,
+  hasRemoteSignal,
   ICP_EXCLUDE_PATTERNS,
   ICP_EXCLUDED_LOCATION_PATTERNS,
   ICP_INCLUDE_PATTERNS,
   ICP_PREFERRED_LOCATION_PATTERNS,
+  isJobBoardAuthor,
 } from "../config/icp.js";
 import { LIMITS } from "../config/limits.js";
 
 export interface IcpFilterInput {
   targetType: "post" | "person";
   headline?: string | null;
+  /**
+   * Post author display name. Aggregator accounts often carry their giveaway
+   * wording here with an empty headline, so the job-board check needs both.
+   */
+  authorName?: string | null;
   content?: string | null;
   location?: string | null;
   reactionCount?: number | null;
@@ -29,7 +37,7 @@ function combinedText(input: IcpFilterInput): string {
     .join(" ");
 }
 
-function isExcludedLocation(location: string): boolean {
+export function isExcludedLocation(location: string): boolean {
   return ICP_EXCLUDED_LOCATION_PATTERNS.some((p) => p.test(location));
 }
 
@@ -51,8 +59,19 @@ function isVeryFreshPost(postedAt?: string | null): boolean {
 }
 
 /**
+ * A hiring post is an opportunity regardless of traction. Most "we're hiring"
+ * posts never get many reactions, so the traction gate would discard exactly
+ * the posts worth engaging with. Remote is non-negotiable, so require it here.
+ */
+export function isRemoteHiringPost(input: IcpFilterInput): boolean {
+  const text = [input.content, input.headline].filter(Boolean).join(" ");
+  if (!hasHiringSignal(text)) return false;
+  return hasRemoteSignal(text) || hasRemoteSignal(input.location);
+}
+
+/**
  * Soft engagement gate for posts we might like/comment on.
- * Fresh posts get a pass (still need relevance score later).
+ * Fresh posts and remote hiring posts get a pass (still need relevance later).
  */
 export function passesEngagementGate(input: IcpFilterInput): IcpFilterResult {
   if (input.targetType !== "post") return { pass: true };
@@ -61,6 +80,10 @@ export function passesEngagementGate(input: IcpFilterInput): IcpFilterResult {
   const comments = input.commentCount ?? 0;
 
   if (isVeryFreshPost(input.postedAt)) {
+    return { pass: true };
+  }
+
+  if (isRemoteHiringPost(input)) {
     return { pass: true };
   }
 
@@ -82,7 +105,7 @@ export function passesIcpFilter(input: IcpFilterInput): IcpFilterResult {
     return { pass: false, reason: `excluded location: ${location}` };
   }
 
-  // Catch India etc. mentioned in headline when location field is empty
+  // Catch an excluded region named in the headline when location is empty
   if (!location && isExcludedLocation(text)) {
     return { pass: false, reason: "excluded location signal in profile/content" };
   }
@@ -120,6 +143,20 @@ export function passesIcpFilter(input: IcpFilterInput): IcpFilterResult {
           return { pass: false, reason: `author excluded: ${pattern.source}` };
         }
       }
+
+    }
+
+    const author = [headline, input.authorName].filter(Boolean).join(" ");
+    if (isJobBoardAuthor(author)) {
+      return {
+        pass: false,
+        reason: `job board aggregator: ${author.slice(0, 60)}`,
+      };
+    }
+
+    // Remote only: a hiring post with no remote signal is not an opportunity.
+    if (hasHiringSignal(input.content) && !isRemoteHiringPost(input)) {
+      return { pass: false, reason: "hiring post without a remote signal" };
     }
 
     const engagement = passesEngagementGate(input);

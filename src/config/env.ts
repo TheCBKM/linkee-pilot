@@ -11,6 +11,25 @@ const discordWebhookSchema = z
   .optional()
   .default("");
 
+const boolFlag = (defaultValue: "true" | "false") =>
+  z
+    .string()
+    .default(defaultValue)
+    .transform((v) => v === "true");
+
+/** Shared across strict and lenient schemas. */
+const featureFlags = {
+  /** Remote job discovery via LinkedIn jobs search. */
+  ENABLE_JOB_DISCOVERY: boolFlag("true"),
+  /**
+   * Outbound DM drafting and sending. Off by default: DMs carry the account
+   * owner's name and are the highest-risk automation in this agent.
+   */
+  ENABLE_DM: boolFlag("false"),
+  PORTFOLIO_URL: z.string().default("https://rajaram.info"),
+  RESUME_URL: z.string().default(""),
+};
+
 const fullEnvSchema = z.object({
   UNIPILE_BASE_URL: z.string().url(),
   UNIPILE_API_KEY: z.string().min(1),
@@ -29,6 +48,7 @@ const fullEnvSchema = z.object({
   DISCORD_WEBHOOK_URL: discordWebhookSchema,
   /** LinkedIn provider_id for the account owner — never invite / target this profile. */
   OWN_PROVIDER_ID: z.string().default(""),
+  ...featureFlags,
 });
 
 const minimalEnvSchema = z.object({
@@ -48,6 +68,7 @@ const minimalEnvSchema = z.object({
     .transform((v) => v === "true"),
   DISCORD_WEBHOOK_URL: discordWebhookSchema,
   OWN_PROVIDER_ID: z.string().default(""),
+  ...featureFlags,
 });
 
 export type Env = z.infer<typeof fullEnvSchema>;

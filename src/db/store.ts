@@ -9,6 +9,7 @@ import {
   getDailyCap,
   LIMITS,
 } from "../config/limits.js";
+import { JOB_STRONG_MATCH_SCORE } from "../config/jobs.js";
 import {
   checkInviteReady,
   maxStage,
@@ -1289,6 +1290,390 @@ export function countPendingNurturePosts(): number {
       )
       .get() as { c: number }
   ).c;
+}
+
+// --- Remote job / freelance opportunities ---
+
+export type OpportunityStatus =
+  | "new"
+  | "filtered"
+  | "shortlisted"
+  | "applied"
+  | "dismissed";
+
+export interface OpportunityRow {
+  id: number;
+  job_id: string;
+  title: string;
+  company: string | null;
+  company_url: string | null;
+  url: string | null;
+  location: string | null;
+  presence: string | null;
+  job_type: string | null;
+  role_family: string | null;
+  posted_at: string | null;
+  description: string | null;
+  match_score: number;
+  match_reasons: string | null;
+  match_gaps: string | null;
+  pitch: string | null;
+  status: string;
+  notified: number;
+  metadata: string | null;
+  discovered_at: string;
+}
+
+export interface UpsertOpportunityInput {
+  jobId: string;
+  title: string;
+  company?: string | null;
+  companyUrl?: string | null;
+  url?: string | null;
+  location?: string | null;
+  presence?: string | null;
+  jobType?: string | null;
+  roleFamily?: string | null;
+  postedAt?: string | null;
+  description?: string | null;
+  matchScore?: number;
+  matchReasons?: string[];
+  matchGaps?: string[];
+  pitch?: string | null;
+  status?: OpportunityStatus;
+  metadata?: Record<string, unknown>;
+}
+
+export function hasRecentOpportunity(
+  jobId: string,
+  withinDays: number
+): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM opportunities
+       WHERE job_id = ?
+         AND discovered_at >= datetime('now', ?)
+       LIMIT 1`
+    )
+    .get(jobId, `-${withinDays} days`) as { 1: number } | undefined;
+  return !!row;
+}
+
+export function upsertOpportunity(input: UpsertOpportunityInput): void {
+  getDb()
+    .prepare(
+      `INSERT INTO opportunities (
+         job_id, title, company, company_url, url, location, presence,
+         job_type, role_family, posted_at, description, match_score,
+         match_reasons, match_gaps, pitch, status, metadata
+       ) VALUES (
+         @job_id, @title, @company, @company_url, @url, @location, @presence,
+         @job_type, @role_family, @posted_at, @description, @match_score,
+         @match_reasons, @match_gaps, @pitch, @status, @metadata
+       )
+       ON CONFLICT(job_id) DO UPDATE SET
+         title = excluded.title,
+         company = COALESCE(excluded.company, opportunities.company),
+         company_url = COALESCE(excluded.company_url, opportunities.company_url),
+         url = COALESCE(excluded.url, opportunities.url),
+         location = COALESCE(excluded.location, opportunities.location),
+         presence = COALESCE(excluded.presence, opportunities.presence),
+         job_type = COALESCE(excluded.job_type, opportunities.job_type),
+         role_family = COALESCE(excluded.role_family, opportunities.role_family),
+         posted_at = COALESCE(excluded.posted_at, opportunities.posted_at),
+         description = COALESCE(excluded.description, opportunities.description),
+         match_score = excluded.match_score,
+         match_reasons = excluded.match_reasons,
+         match_gaps = excluded.match_gaps,
+         pitch = excluded.pitch,
+         metadata = COALESCE(excluded.metadata, opportunities.metadata)`
+    )
+    .run({
+      job_id: input.jobId,
+      title: input.title,
+      company: input.company ?? null,
+      company_url: input.companyUrl ?? null,
+      url: input.url ?? null,
+      location: input.location ?? null,
+      presence: input.presence ?? null,
+      job_type: input.jobType ?? null,
+      role_family: input.roleFamily ?? null,
+      posted_at: input.postedAt ?? null,
+      description: input.description ?? null,
+      match_score: input.matchScore ?? 0,
+      match_reasons: JSON.stringify(input.matchReasons ?? []),
+      match_gaps: JSON.stringify(input.matchGaps ?? []),
+      pitch: input.pitch ?? null,
+      status: input.status ?? "new",
+      metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+    });
+}
+
+export function markOpportunityNotified(jobId: string): void {
+  getDb()
+    .prepare("UPDATE opportunities SET notified = 1 WHERE job_id = ?")
+    .run(jobId);
+}
+
+export function setOpportunityStatus(
+  id: number,
+  status: OpportunityStatus
+): void {
+  getDb()
+    .prepare("UPDATE opportunities SET status = ? WHERE id = ?")
+    .run(status, id);
+}
+
+export function getTopOpportunities(limit = 25): OpportunityRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM opportunities
+       WHERE status NOT IN ('filtered', 'dismissed')
+       ORDER BY match_score DESC, discovered_at DESC
+       LIMIT ?`
+    )
+    .all(limit) as OpportunityRow[];
+}
+
+export function getOpportunityStats(): {
+  total: number;
+  strong: number;
+  new7d: number;
+  applied: number;
+} {
+  const database = getDb();
+  const one = (sql: string, ...params: unknown[]): number =>
+    (database.prepare(sql).get(...params) as { c: number }).c;
+
+  return {
+    total: one(
+      "SELECT COUNT(*) as c FROM opportunities WHERE status != 'filtered'"
+    ),
+    strong: one(
+      "SELECT COUNT(*) as c FROM opportunities WHERE status NOT IN ('filtered','dismissed') AND match_score >= ?",
+      JOB_STRONG_MATCH_SCORE
+    ),
+    new7d: one(
+      `SELECT COUNT(*) as c FROM opportunities
+       WHERE status != 'filtered' AND discovered_at >= datetime('now', '-7 days')`
+    ),
+    applied: one(
+      "SELECT COUNT(*) as c FROM opportunities WHERE status = 'applied'"
+    ),
+  };
+}
+
+// --- Approval-gated DM queue ---
+
+export type DmStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "sent"
+  | "failed";
+
+export interface DmQueueRow {
+  id: number;
+  provider_id: string;
+  full_name: string | null;
+  headline: string | null;
+  opportunity_id: number | null;
+  kind: string;
+  draft_text: string;
+  status: string;
+  chat_id: string | null;
+  error: string | null;
+  created_at: string;
+  approved_at: string | null;
+  sent_at: string | null;
+}
+
+export function enqueueDm(input: {
+  providerId: string;
+  fullName?: string | null;
+  headline?: string | null;
+  opportunityId?: number | null;
+  kind?: "first_touch" | "followup";
+  draftText: string;
+}): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO dm_queue (
+         provider_id, full_name, headline, opportunity_id, kind, draft_text
+       ) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.providerId,
+      input.fullName ?? null,
+      input.headline ?? null,
+      input.opportunityId ?? null,
+      input.kind ?? "first_touch",
+      input.draftText
+    );
+  return Number(result.lastInsertRowid);
+}
+
+/** True when this person already has any DM queued, sent, or rejected. */
+export function hasDmForProvider(providerId: string): boolean {
+  if (!providerId) return false;
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM dm_queue
+       WHERE provider_id = ? AND status != 'failed'
+       LIMIT 1`
+    )
+    .get(providerId) as { 1: number } | undefined;
+  return !!row;
+}
+
+export function getDmQueue(status?: DmStatus, limit = 50): DmQueueRow[] {
+  if (status) {
+    return getDb()
+      .prepare(
+        `SELECT * FROM dm_queue WHERE status = ?
+         ORDER BY created_at ASC LIMIT ?`
+      )
+      .all(status, limit) as DmQueueRow[];
+  }
+  return getDb()
+    .prepare("SELECT * FROM dm_queue ORDER BY created_at DESC LIMIT ?")
+    .all(limit) as DmQueueRow[];
+}
+
+export function getDmById(id: number): DmQueueRow | null {
+  const row = getDb()
+    .prepare("SELECT * FROM dm_queue WHERE id = ?")
+    .get(id) as DmQueueRow | undefined;
+  return row ?? null;
+}
+
+/** Oldest approved DM waiting to go out. */
+export function getNextApprovedDm(): DmQueueRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM dm_queue WHERE status = 'approved'
+       ORDER BY approved_at ASC LIMIT 1`
+    )
+    .get() as DmQueueRow | undefined;
+  return row ?? null;
+}
+
+export function countPendingDmApprovals(): number {
+  return (
+    getDb()
+      .prepare(
+        "SELECT COUNT(*) as c FROM dm_queue WHERE status = 'pending_approval'"
+      )
+      .get() as { c: number }
+  ).c;
+}
+
+/** Approve a pending DM, optionally replacing the draft with edited text. */
+export function approveDm(id: number, editedText?: string): boolean {
+  const result = getDb()
+    .prepare(
+      `UPDATE dm_queue
+       SET status = 'approved',
+           approved_at = datetime('now'),
+           draft_text = COALESCE(?, draft_text)
+       WHERE id = ? AND status = 'pending_approval'`
+    )
+    .run(editedText ?? null, id);
+  return result.changes > 0;
+}
+
+export function rejectDm(id: number): boolean {
+  const result = getDb()
+    .prepare(
+      `UPDATE dm_queue SET status = 'rejected'
+       WHERE id = ? AND status IN ('pending_approval', 'approved')`
+    )
+    .run(id);
+  return result.changes > 0;
+}
+
+export function markDmSent(id: number, chatId: string | null): void {
+  getDb()
+    .prepare(
+      `UPDATE dm_queue
+       SET status = 'sent', sent_at = datetime('now'), chat_id = ?, error = NULL
+       WHERE id = ?`
+    )
+    .run(chatId, id);
+}
+
+/** Attach the thread a queued follow-up should be sent into. */
+export function setDmChatId(id: number, chatId: string): void {
+  getDb().prepare("UPDATE dm_queue SET chat_id = ? WHERE id = ?").run(chatId, id);
+}
+
+export function markDmFailed(id: number, error: string): void {
+  getDb()
+    .prepare("UPDATE dm_queue SET status = 'failed', error = ? WHERE id = ?")
+    .run(error.slice(0, 500), id);
+}
+
+/**
+ * Accepted connections who look like they can hire, have no DM yet, and have
+ * been connected long enough that a message does not look automated.
+ */
+export function getConnectionForDm(params: {
+  minHoursSinceAccept: number;
+  maxDaysSinceAccept: number;
+}): ConnectionRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT c.* FROM connections c
+       WHERE c.accepted_at IS NOT NULL
+         AND c.accepted_at <= datetime('now', ?)
+         AND c.accepted_at >= datetime('now', ?)
+         AND NOT EXISTS (
+           SELECT 1 FROM dm_queue d
+           WHERE d.provider_id = c.provider_id AND d.status != 'failed'
+         )
+       ORDER BY c.accepted_at ASC
+       LIMIT 1`
+    )
+    .get(
+      `-${params.minHoursSinceAccept} hours`,
+      `-${params.maxDaysSinceAccept} days`
+    ) as ConnectionRow | undefined;
+  return row ?? null;
+}
+
+export function markPersonMessaged(providerId: string): void {
+  const person = findPersonByProviderId(providerId);
+  if (!person) return;
+  advanceSequenceStage(person.target_id, "messaged");
+}
+
+export function markPersonReplied(providerId: string): void {
+  const person = findPersonByProviderId(providerId);
+  if (!person) return;
+  advanceSequenceStage(person.target_id, "replied");
+}
+
+/**
+ * Sent first-touch DMs with a chat we can read, where no follow-up has been
+ * queued yet. Oldest first so nobody waits indefinitely.
+ */
+export function getSentDmsAwaitingFollowup(limit = 5): DmQueueRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM dm_queue d
+       WHERE d.status = 'sent'
+         AND d.kind = 'first_touch'
+         AND d.chat_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM dm_queue f
+           WHERE f.provider_id = d.provider_id
+             AND f.kind = 'followup'
+             AND f.status != 'failed'
+         )
+       ORDER BY d.sent_at ASC
+       LIMIT ?`
+    )
+    .all(limit) as DmQueueRow[];
 }
 
 export { stageRank, checkInviteReady };

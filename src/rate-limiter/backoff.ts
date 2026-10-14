@@ -15,6 +15,12 @@ const SKIP_ERRORS = new Set([
 /** Soft-skip: allow a few attempts, then permanently skip the target. */
 export const SOFT_SKIP_MAX_TRIES: Record<string, number> = {
   "errors/resource_not_found": 2,
+  /**
+   * The post exists but LinkedIn will not accept a comment on it, typically a
+   * group post. Retrying never starts working and each attempt burns an AI
+   * draft, so give up after the first failure.
+   */
+  "errors/invalid_post": 1,
 };
 
 const HALT_ERRORS = new Set([

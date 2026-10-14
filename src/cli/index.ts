@@ -5,9 +5,13 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { getDbPath, getPidPath } from "../config/env.js";
 import {
-  getStatsSummary,
+  approveDm,
   getAgentState,
+  getDmQueue,
   getQuotaRemaining,
+  getStatsSummary,
+  getTopOpportunities,
+  rejectDm,
 } from "../db/store.js";
 import {
   readPidFile,
@@ -128,6 +132,88 @@ program
 
     console.log(`\nDatabase: ${getDbPath()}`);
     console.log();
+  });
+
+program
+  .command("jobs")
+  .description("List scored remote opportunities")
+  .option("-n, --limit <count>", "How many to show", "15")
+  .action((opts: { limit: string }) => {
+    const limit = parseInt(opts.limit, 10) || 15;
+    const rows = getTopOpportunities(limit);
+
+    console.log("\n=== Remote Opportunities ===\n");
+    if (rows.length === 0) {
+      console.log("  (none scored yet)\n");
+      return;
+    }
+
+    for (const row of rows) {
+      const meta = [row.company, row.location, row.job_type]
+        .filter(Boolean)
+        .join(" · ");
+      console.log(`  [${row.match_score}] ${row.title}`);
+      if (meta) console.log(`        ${meta}`);
+      console.log(`        status: ${row.status}`);
+      if (row.url) console.log(`        ${row.url}`);
+      console.log();
+    }
+  });
+
+const dm = program.command("dm").description("Review queued outbound DMs");
+
+dm.command("list", { isDefault: true })
+  .description("Show drafts awaiting approval")
+  .action(() => {
+    const rows = getDmQueue("pending_approval");
+
+    console.log("\n=== DMs Awaiting Approval ===\n");
+    if (rows.length === 0) {
+      console.log("  (nothing queued)\n");
+      return;
+    }
+
+    for (const row of rows) {
+      console.log(`  #${row.id}  ${row.full_name ?? row.provider_id}  (${row.kind})`);
+      if (row.headline) console.log(`        ${row.headline}`);
+      console.log(`        "${row.draft_text}"`);
+      console.log(`        queued ${row.created_at}`);
+      console.log();
+    }
+    console.log("  Approve with: linkedin-auto dm approve <id>\n");
+  });
+
+dm.command("approve <id>")
+  .description("Approve a draft so the agent sends it on its next DM slot")
+  .option("-t, --text <text>", "Replace the draft with your own text")
+  .action((id: string, opts: { text?: string }) => {
+    const dmId = parseInt(id, 10);
+    if (Number.isNaN(dmId)) {
+      console.error("id must be a number");
+      process.exit(1);
+    }
+    if (approveDm(dmId, opts.text)) {
+      console.log(`Approved DM #${dmId}. The agent will send it on its next DM slot.`);
+    } else {
+      console.error(`DM #${dmId} not found or not awaiting approval.`);
+      process.exit(1);
+    }
+  });
+
+dm.command("reject <id>")
+  .description("Reject a draft so it is never sent")
+  .action((id: string) => {
+    const dmId = parseInt(id, 10);
+    if (Number.isNaN(dmId)) {
+      console.error("id must be a number");
+      process.exit(1);
+    }
+    if (rejectDm(dmId)) {
+      console.log(`Rejected DM #${dmId}.`);
+    } else {
+      console.error(`DM #${dmId} not found or already sent.`);
+      process.exit(1);
+    }
   });
 
 program.parse();

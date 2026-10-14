@@ -22,6 +22,12 @@ import { sendConnectionRequest } from "../actions/send-invite.js";
 import { withdrawStaleInvite } from "../actions/withdraw-invite.js";
 import { syncConnections } from "../actions/sync-connections.js";
 import { viewProfile } from "../actions/view-profile.js";
+import { discoverJobs } from "../actions/discover-jobs.js";
+import {
+  draftDmForApproval,
+  draftFollowupForApproval,
+  sendApprovedDm,
+} from "../actions/send-dm.js";
 import { publishPost } from "../actions/create-post.js";
 import { fetchAndRecordProfile } from "../actions/fetch-profile.js";
 import { gatherPostTrends } from "../ai/post-trends.js";
@@ -118,6 +124,51 @@ async function executeAction(
         ],
       });
       writeHeartbeat("research");
+      break;
+    }
+    case "discover_jobs": {
+      console.log("[agent] Searching remote jobs...");
+      const result = await discoverJobs();
+      if (result.ran) {
+        console.log(
+          `[agent] Jobs "${result.keyword}": ${result.seen} seen, ` +
+            `${result.scored} scored, ${result.kept} kept, ${result.strong} strong`
+        );
+      } else {
+        console.log(`[agent] Job discovery skipped: ${result.reason}`);
+      }
+      writeHeartbeat("discover_jobs");
+      break;
+    }
+    case "send_dm": {
+      // Sending an approved draft always takes priority over making more.
+      const sent = await sendApprovedDm();
+      if (sent.sent) {
+        console.log(`[agent] Sent approved DM #${sent.dmId}`);
+      } else {
+        const drafted = await draftDmForApproval();
+        console.log(
+          drafted.drafted
+            ? `[agent] Queued DM #${drafted.dmId} to ${drafted.name ?? "unknown"} for approval`
+            : `[agent] No DM queued: ${drafted.reason}`
+        );
+      }
+      writeHeartbeat("send_dm");
+      break;
+    }
+    case "dm_followup": {
+      const sent = await sendApprovedDm();
+      if (sent.sent) {
+        console.log(`[agent] Sent approved DM #${sent.dmId}`);
+      } else {
+        const drafted = await draftFollowupForApproval();
+        console.log(
+          drafted.drafted
+            ? `[agent] Queued follow-up #${drafted.dmId} for approval`
+            : `[agent] No follow-up queued: ${drafted.reason}`
+        );
+      }
+      writeHeartbeat("dm_followup");
       break;
     }
     case "like_post": {

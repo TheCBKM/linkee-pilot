@@ -4,18 +4,29 @@ import {
   advanceSequenceStage,
   getPersonForPostTarget,
   isNurtureTarget,
+  markTargetSkipped,
   touchConnectionEngaged,
   updateTargetStatus,
   upsertPersonFromPostAuthor,
 } from "../db/store.js";
 import { draftComment } from "../ai/comment-writer.js";
 import type { Target } from "../db/store.js";
-import { resolvePostSocialId } from "../ai/research.js";
+import { isGroupPost, resolvePostSocialId } from "../ai/research.js";
 
 export async function commentOnPost(target: Target): Promise<boolean> {
   const postId = resolvePostSocialId(target) ?? target.social_id ?? target.target_id;
   const content = target.content_preview ?? "";
   const nurture = isNurtureTarget(target);
+
+  // Commenting would fail with errors/invalid_post, so skip before paying for
+  // an AI draft.
+  if (isGroupPost(target)) {
+    console.log(
+      `[comment] Skipping group post ${postId.slice(0, 60)}: comments unsupported`
+    );
+    markTargetSkipped(target.target_id);
+    return false;
+  }
 
   const comment = await draftComment({
     postContent: content,

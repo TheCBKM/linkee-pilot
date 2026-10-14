@@ -34,9 +34,18 @@ function contentHash(text: string): string {
   return crypto.createHash("sha256").update(text.trim().toLowerCase()).digest("hex");
 }
 
+export type SafetyContentType = "comment" | "invite" | "post" | "dm";
+
+const MAX_LENGTHS: Record<SafetyContentType, number> = {
+  comment: LIMITS.contentMaxLength.commentApi,
+  invite: LIMITS.contentMaxLength.invite,
+  dm: LIMITS.contentMaxLength.dm,
+  post: 3000,
+};
+
 export async function safetyFilter(params: {
   text: string;
-  contentType: "comment" | "invite" | "post";
+  contentType: SafetyContentType;
 }): Promise<SafetyCheckResult> {
   const { text, contentType } = params;
   const trimmed = text.trim();
@@ -45,12 +54,7 @@ export async function safetyFilter(params: {
     return { safe: false, reason: "empty_content" };
   }
 
-  const maxLen =
-    contentType === "comment"
-      ? LIMITS.contentMaxLength.commentApi
-      : contentType === "invite"
-        ? LIMITS.contentMaxLength.invite
-        : 3000;
+  const maxLen = MAX_LENGTHS[contentType];
 
   if (trimmed.length > maxLen) {
     return { safe: false, reason: "too_long" };

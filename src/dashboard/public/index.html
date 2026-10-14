@@ -19,8 +19,8 @@
   <header class="header">
     <div>
       <p class="eyebrow">Agent dashboard</p>
-      <h1>LinkedIn Profile Enhancer</h1>
-      <p class="subtitle">Read-only view of outreach, nurture, content, and live quotas</p>
+    <h1>LinkedIn Profile Enhancer</h1>
+    <p class="subtitle">Remote job and freelance search: opportunities, outreach, DM approvals, and live quotas</p>
     </div>
     <div class="header-meta">
       <span id="last-updated" role="status" aria-live="polite">Loading…</span>
@@ -31,6 +31,8 @@
 
   <nav class="section-nav" aria-label="Dashboard sections">
     <a href="#agent-health">Health</a>
+    <a href="#opportunities">Opportunities</a>
+    <a href="#dms">DMs</a>
     <a href="#outreach">Outreach</a>
     <a href="#nurture">Nurture</a>
     <a href="#content">Content</a>
@@ -87,6 +89,102 @@
       <section class="panel" id="backoff-panel">
         <h2>Active Backoffs</h2>
         <div id="backoffs" class="backoffs"></div>
+      </section>
+    </section>
+
+    <section class="dash-section" id="opportunities">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Remote opportunities</h2>
+          <p class="section-desc">Remote-only job and contract listings, scored against your profile</p>
+        </div>
+      </div>
+
+      <section class="cards outreach-cards" id="opportunity-cards" aria-label="Opportunity stats">
+        <div class="card card-highlight">
+          <div class="card-label">Strong Matches</div>
+          <div class="card-value" id="stat-opp-strong">—</div>
+          <div class="card-sub" id="stat-opp-threshold">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">New (7d)</div>
+          <div class="card-value" id="stat-opp-new">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Tracked</div>
+          <div class="card-value" id="stat-opp-total">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Applied</div>
+          <div class="card-value" id="stat-opp-applied">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Discovery</div>
+          <div class="card-value card-value-sm" id="stat-opp-enabled">—</div>
+        </div>
+      </section>
+
+      <section class="panel" id="opportunities-panel">
+        <h2>Scored listings</h2>
+        <p class="panel-desc">
+          Applying is manual: LinkedIn has no apply API. Shortlist here, then apply from the listing.
+        </p>
+        <div id="opportunities-list" class="posts-list"></div>
+        <p id="no-opportunities" class="empty hidden">No opportunities scored yet</p>
+      </section>
+    </section>
+
+    <section class="dash-section" id="dms">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">DM approvals</h2>
+          <p class="section-desc">Nothing is sent until you approve it. Edit the draft before approving if needed.</p>
+        </div>
+      </div>
+
+      <section class="cards outreach-cards" id="dm-cards" aria-label="DM stats">
+        <div class="card card-highlight">
+          <div class="card-label">Awaiting Approval</div>
+          <div class="card-value" id="stat-dm-pending">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Sent</div>
+          <div class="card-value" id="stat-dm-sent">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Replied</div>
+          <div class="card-value" id="stat-dm-replied">—</div>
+        </div>
+        <div class="card">
+          <div class="card-label">DM Outreach</div>
+          <div class="card-value card-value-sm" id="stat-dm-enabled">—</div>
+        </div>
+      </section>
+
+      <section class="panel" id="dm-approvals-panel">
+        <h2>Pending drafts</h2>
+        <div id="dm-pending-list" class="posts-list"></div>
+        <p id="no-dm-pending" class="empty hidden">No drafts waiting for review</p>
+      </section>
+
+      <section class="panel" id="dm-history-panel">
+        <h2>Recent DM decisions</h2>
+        <div class="table-wrap">
+          <table>
+            <caption class="sr-only">Recent DM outcomes</caption>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Name</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Status</th>
+                <th scope="col">Message</th>
+              </tr>
+            </thead>
+            <tbody id="dm-history-body"></tbody>
+          </table>
+        </div>
+        <p id="no-dm-history" class="empty hidden">No DMs sent or rejected yet</p>
       </section>
     </section>
 
@@ -369,7 +467,7 @@
   </div>
 
   <footer class="dash-footer">
-    <p>LinkedIn Profile Enhancer · read-only SQLite view · auto-refresh every 15s</p>
+    <p>LinkedIn Profile Enhancer · remote job and freelance search · unauthenticated, keep this port private · auto-refresh every 15s</p>
     <a href="/docs">Architecture docs</a>
   </footer>
 

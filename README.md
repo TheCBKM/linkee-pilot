@@ -1,26 +1,31 @@
 # LinkedIn Profile Enhancer
 
-Background AI agent that autonomously enhances your LinkedIn presence — research, engage, connect, and post — with human-like rate limiting to protect your account.
+Background AI agent that runs a **remote job and freelance search** on LinkedIn: it finds remote roles and contract work, builds relationships with the people who can hire you, and keeps your profile and content working for you, all with human-like rate limiting to protect your account.
 
-Built for **Rajaram Joshi**, CTO of [Scrummer.ai](https://scrummer.ai/) — AI standup bot and Jira automation for engineering teams.
+Built for **Rajaram Joshi** — independent AI/backend engineer and freelance CTO, looking for remote senior engineering roles and contract builds. Portfolio: [rajaram.info](https://rajaram.info).
+
+Everything is **remote only**. Job search hard-codes `presence: ["remote"]`, hiring posts without a remote signal are rejected, and non-remote listings are dropped before they cost an AI call. Geography is broad (including India); what is never relaxed is the remote requirement.
 
 ## Features
 
 - **Background daemon** — runs continuously, one action at a time with random delays
-- **AI-powered** — OpenAI researches targets, drafts comments, posts, and invite notes
-- **Warm outreach sequences** — like → comment → profile view → invite (no cold invites)
+- **Remote job discovery** — LinkedIn jobs search across six role families, AI-scored 0-100 against your profile with fit reasons, honest gaps, and a tailored pitch
+- **Approval-gated DM outreach** — drafts a soft first message to accepted connections and waits for you to approve it; nothing is ever sent automatically
+- **Hiring-signal detection** — "we're hiring" posts bypass the engagement-traction gate, because a fresh job post with two reactions is still an opportunity
+- **AI-powered** — OpenAI scores targets and jobs, drafts comments, posts, invite notes, and DMs
+- **Warm outreach sequences** — like → comment → profile view → invite → DM (no cold invites, no cold DMs)
 - **Network nurture** — occasional likes/comments on first-degree connections (especially recent accepts)
 - **Own-post replies** — answers comments on your posts within 48 hours; upserts commenters as warm leads
 - **Stale invite withdrawal** — auto-cancels pending invites older than 21 days
-- **ICP hard filters** — deterministic title/headline gates before AI scoring
-- **Preferred geography** — US, Europe, UK, Canada, Australia, Russia; India filtered out
+- **Hiring-side ICP** — recruiters, talent acquisition, hiring managers, founders, and agency owners are the targets; coaches, resume writers, and fellow job seekers are filtered out
+- **Preferred geography** — US, Europe, UK, Canada, Australia, Russia, India; remaining South Asia (Pakistan, Bangladesh, Sri Lanka, Nepal) filtered out
 - **High-engagement focus** — likes/comments prioritize posts with traction and higher relevance
 - **Smarter research** — fresh post search, keyword rotation, pagination, classic LinkedIn API, plus ~9% first-degree nurture search
 - **Research-backed posts** — feed themes from high-score discoveries drive original drafts
 - **Repost with commentary** — ~15% of post days share high-scoring feed content with your take
 - **Post boost window** — ~45 min of ICP likes/comments/replies after each publish to warm the feed
-- **Discord alerts** — optional webhook for start/stop, research, posts, accepts, halt, and rate-limit events
-- **Unipile integration** — LinkedIn actions via official API (likes, comments, invites, posts, profile views, relations)
+- **Discord alerts** — optional webhook for strong job matches, DM approval requests, start/stop, research, posts, accepts, halt, and rate-limit events
+- **Unipile integration** — LinkedIn actions via official API (likes, comments, invites, posts, profile views, relations, jobs search, messaging)
 - **Ban-safe rate limiting** — hard daily caps, working-hours-only, burst pauses, exponential backoff
 - **Em-dash hard gate** — content blocked at safety filter, rate limiter, and Unipile client before publish
 - **Profile audit** — weekly AI suggestions for headline and about section
@@ -65,7 +70,11 @@ npm run dry-run
 | `npm run agent:status` | Running state + quotas |
 | `npm run stats` | Follower growth + action history |
 | `npm run dry-run` | Test without LinkedIn calls |
-| `npm run dashboard` | Read-only web dashboard (localhost) |
+| `npm run dashboard` | Web dashboard (localhost) |
+| `npx tsx src/cli/index.ts jobs` | List scored remote opportunities |
+| `npx tsx src/cli/index.ts dm list` | Show DM drafts awaiting approval |
+| `npx tsx src/cli/index.ts dm approve <id>` | Approve a draft (`--text` to rewrite it) |
+| `npx tsx src/cli/index.ts dm reject <id>` | Reject a draft so it is never sent |
 
 ## Dashboard
 
@@ -80,7 +89,18 @@ npm run dashboard
 # open http://127.0.0.1:3847
 ```
 
-The dashboard is **read-only** — it opens SQLite in readonly mode and does not affect the agent.
+Reads open SQLite in readonly mode. The dashboard also exposes two **mutating** endpoints, for approving DMs and setting opportunity status.
+
+> **The dashboard has no authentication.** Anyone who can reach the port can read your pipeline and approve queued DMs. Access control has to happen at the network layer. An in-process source-address check is not an option: Docker NATs inbound traffic, so the container sees the bridge gateway for every request, including ones from the host's own loopback, and that same address is what internet traffic arrives from once the port is published on `0.0.0.0`.
+>
+> `docker-compose.yml` publishes `"${DASHBOARD_PORT:-3847}:3847"`, which binds **all** interfaces. To keep it private, either publish on loopback only:
+>
+> ```yaml
+> ports:
+>   - "127.0.0.1:${DASHBOARD_PORT:-3847}:3847"
+> ```
+>
+> then reach it with `ssh -L 3847:127.0.0.1:3847 user@host`, or leave the binding alone and block the port at the firewall.
 
 | Setting | Default |
 |---------|---------|
@@ -89,16 +109,16 @@ The dashboard is **read-only** — it opens SQLite in readonly mode and does not
 
 Architecture docs (pipelines, schedule windows, rate limits, data model, notifications) are at **http://127.0.0.1:3847/docs**.
 
-Dashboard sections include agent health, outreach funnel, **network nurture** (connections synced, accepts, nurture likes/comments), post health, ICP quality, quotas, and the activity log.
+Dashboard sections: agent health, **remote opportunities** (scored listings with fit, gaps, pitch, and shortlist/applied/dismiss controls), **DM approvals** (editable drafts with approve/reject), outreach funnel, network nurture, post health, ICP quality, quotas, and the activity log.
 
 ## Outreach sequence
 
-People discovered from posts follow a warm path before any connection request:
+People discovered from posts follow a warm path before any connection request, and now continue past the accept into a conversation:
 
 ```
 discovered → liked → commented → viewed → invite_ready → invited
                                                       ↘ withdrawn (21+ days pending)
-                                                      ↘ connected (accept detected)
+                                                      ↘ connected → messaged → replied
 ```
 
 | Source | Invite readiness |
@@ -108,6 +128,33 @@ discovered → liked → commented → viewed → invite_ready → invited
 | **Comment-sourced** (own-post commenters) | Profile view only |
 
 Invites are **never** sent to cold targets. Pending invites older than **21 days** are auto-withdrawn (`withdraw_invite`). Accepts are inferred when connection sync finds a relation that matches a prior successful invite → person marked `connected`.
+
+## Remote job discovery
+
+Set `ENABLE_JOB_DISCOVERY=true` (the default). Discovery runs a few times a day, weighted toward the morning window since fresh postings land overnight.
+
+1. **Search** — picks one of six role families (AI/LLM, backend, platform/DevOps, engineering leadership, founding engineer, freelance/contract) and one keyword from it, then queries LinkedIn jobs with `presence: ["remote"]` hard-coded and a rotating preferred `region`. Jobs search ignores the array-style `location` filter (it returns zero results), so geography comes from the single-ID `region` field; results are geo-checked again locally.
+2. **Dedupe** — job ids seen in the last 45 days are skipped without spending an AI call.
+3. **Score** — up to 8 listings per run are scored 0-100 against your profile. The matcher returns fit reasons, honest gaps, and a one-paragraph pitch. A listing judged non-remote is capped at 35 and filtered.
+4. **Persist** — everything lands in the `opportunities` table. Scores below 55 are stored as `filtered` so they never clutter the dashboard but also never get re-scored.
+5. **Notify** — matches scoring **78 or above** trigger a Discord embed with the score, reasons, and pitch.
+
+Review them in the dashboard or with `npx tsx src/cli/index.ts jobs`, then mark each one shortlisted, applied, or dismissed.
+
+**Applying is manual.** Unipile exposes no apply-to-job endpoint, so the agent discovers, scores, and writes the pitch; you submit the application. This is a deliberate limit rather than something to work around, since auto-applying would be both the least effective and the riskiest part of the system.
+
+## DM outreach
+
+Off by default (`ENABLE_DM=false`). DMs go out under your name, so the design assumes you want a look at every one.
+
+1. **Select** — an accepted connection whose headline matches the hiring ICP, at least **18 hours** and at most **30 days** after the accept. Nobody is DM'd twice.
+2. **Draft** — a soft first message: 2-3 sentences referencing their actual work or hiring focus, one genuine question, and **no ask**. No availability pitch, no CV, no link, no request for a call. The goal is a reply, not a conversion. Capped at 450 characters and run through the same humanize and safety gates as comments.
+3. **Queue** — the draft lands in `dm_queue` as `pending_approval` and a Discord alert fires. Drafting stops once 8 drafts are waiting, so an unattended agent cannot pile up a backlog.
+4. **Approve** — edit and approve in the dashboard, or run `npx tsx src/cli/index.ts dm approve <id>`. Nothing is sent until you do.
+5. **Send** — the agent sends approved drafts on its next DM slot and advances the person to `messaged`.
+6. **Follow up** — when they reply, the person advances to `replied` and a follow-up draft is queued for approval. Availability is mentioned only if their reply actually opens the door.
+
+Recommended rollout: run with `ENABLE_DM=false` for a few days so job discovery and the hiring-side ICP settle, then set `ENABLE_DM=true` with `DRY_RUN=true` to inspect drafts without sending, then go live.
 
 ## Network nurture
 
@@ -148,6 +195,9 @@ Caps below are **effective** daily limits. Week 1–2 = ramp-up base × 0.5; aft
 | Connection requests | 5/day | 25/day |
 | Withdraw invites | 5/day | 20/day |
 | Searches | 20/day | 80/day |
+| Job discovery searches | 3/day | 12/day |
+| DMs sent | 2/day | 10/day |
+| DM follow-ups | 1/day | 8/day |
 | Original posts | — | 3/week (Tue/Thu/Fri) |
 | Profile audit | — | 1/week (Monday) |
 
@@ -163,8 +213,10 @@ Working hours: Mon–Fri, 8am–7pm (configurable via `TIMEZONE`).
 - Halts automatically on `account_restricted` errors
 - All content passes spam filter + OpenAI moderation
 - **Em-dash triple gate** — blocked in safety filter, rate limiter (`contains_em_dash`), and Unipile client before any publish
-- ICP exclude patterns filter recruiters, coaches, and spam profiles before AI scoring
-- Geography: people search scoped to US / Europe / UK / AU / RU; India and South Asia hard-filtered
+- **DMs require explicit approval** — every draft waits in `dm_queue`; drafting halts at 8 pending. The approval routes are unauthenticated, so restrict the dashboard port at the network layer
+- **No public job begging** — comments and invite notes are forbidden from mentioning availability or asking to be considered
+- ICP exclude patterns filter coaches, resume writers, personal-brand accounts, and fellow job seekers before AI scoring
+- Geography: people search scoped to US / Europe / UK / CA / AU / RU / IN; Pakistan, Bangladesh, Sri Lanka, and Nepal hard-filtered
 - Engagement gate: likes/comments only on high-relevance posts with existing traction
 - Connection sync is spaced randomly (few times/day) to avoid automation-like polling patterns
 - Nurture engagement never re-invites connected people or advances invite stages
@@ -177,6 +229,10 @@ Optional. Set `DISCORD_WEBHOOK_URL` to enable; leave empty to disable. Fire-and-
 | Event | Severity |
 |-------|----------|
 | Agent started / stopped | info |
+| Strong job match (score ≥ 78) | info |
+| DM draft awaiting approval | warn |
+| DM sent after approval | info |
+| Reply received, follow-up drafted | warn |
 | Research finished | info |
 | Post published / draft failed | info / warn |
 | Connection accepts detected | info |
@@ -204,3 +260,7 @@ See [`.env.example`](.env.example).
 | `DISCORD_WEBHOOK_URL` | no | Discord webhook URL; empty = no alerts |
 | `DASHBOARD_PORT` | no | Default `3847` |
 | `DASHBOARD_HOST` | no | Default `127.0.0.1` |
+| `ENABLE_JOB_DISCOVERY` | no | Remote job search + AI scoring. Default `true` |
+| `ENABLE_DM` | no | DM drafting and sending. Default **`false`**; drafts still need approval when on |
+| `PORTFOLIO_URL` | no | Default `https://rajaram.info`; used for context, never auto-inserted as a link |
+| `RESUME_URL` | no | Optional resume link for your own reference |
