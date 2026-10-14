@@ -155,6 +155,29 @@ npx tsx src/cli/index.ts es-preview -c india -s eng_executives -n 10
 
 `npm run agent:status` shows the queue and invites per country. Targeting lives in `src/config/es-icp.ts`.
 
+## Docker Compose
+
+Three services share one image and one SQLite volume:
+
+| Service | `AGENT_MODE` | Does |
+|---------|--------------|------|
+| `agent` | `main` | Warm outreach, posts, replies, nurture, invite withdrawal, connection sync |
+| `es-agent` | `es` | Elasticsearch invite pipeline only (idles unless `ES_PIPELINE_ENABLED=true`) |
+| `dashboard` | – | Read-only dashboard on `127.0.0.1:3847` |
+
+Because both agents act on the same LinkedIn account, the shared DB enforces the combined invite cap, backoff, halt state, and a minimum 40s gap between any two LinkedIn calls across containers. ES invites are spaced 20–50 min apart, so ~15/day spread over the workday.
+
+```bash
+docker compose up -d --build            # everything
+docker compose up -d es-agent           # just the ES pipeline
+docker compose logs -f es-agent
+docker compose stop es-agent            # pause ES invites, main agent keeps running
+docker compose exec agent node dist/cli/index.js status
+docker compose exec es-agent node dist/cli/index.js es-preview -c india -s founders --notes
+```
+
+On an account restriction both agents stay up and idle (no restart loop) until the `halted` flag is cleared.
+
 ## Process Management
 
 **pm2:**

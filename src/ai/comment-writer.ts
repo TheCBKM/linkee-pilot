@@ -151,6 +151,8 @@ export async function draftNetworkingInviteNote(params: {
   title?: string;
   company?: string;
   headline?: string;
+  /** Preview mode: run the safety checks without recording the note. */
+  preview?: boolean;
 }): Promise<string | null> {
   const system = `You are writing a LinkedIn connection request note on behalf of Rajaram Joshi, a CTO and hands-on engineer who builds AI systems and backend platforms.
 Rules:
@@ -189,7 +191,11 @@ Write the note only. No quotes.`;
     text = text.slice(0, LIMITS.contentMaxLength.invite - 3) + "...";
   }
 
-  const safety = await safetyFilter({ text, contentType: "invite" });
+  const safety = await safetyFilter({
+    text,
+    contentType: "invite",
+    record: !params.preview,
+  });
   if (!safety.safe) {
     console.warn("[es-invite-writer] Blocked:", safety.reason);
     return null;

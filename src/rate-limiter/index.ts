@@ -8,7 +8,31 @@ import {
   randomBetween,
 } from "./human-delay.js";
 import { handleApiError } from "./backoff.js";
-import { logAction, markPersonConnected } from "../db/store.js";
+import {
+  getAgentState,
+  logAction,
+  markPersonConnected,
+  setAgentState,
+} from "../db/store.js";
+import { LIMITS } from "../config/limits.js";
+
+const LAST_LINKEDIN_CALL_KEY = "last_linkedin_call_at";
+
+/**
+ * Keep a minimum gap between LinkedIn calls across every process sharing the
+ * DB (main and ES containers act on the same account).
+ */
+async function waitForActionGap(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const last = getAgentState(LAST_LINKEDIN_CALL_KEY);
+    const waitMs = last
+      ? new Date(last).getTime() + LIMITS.timing.minGapBetweenActionsMs - Date.now()
+      : 0;
+    if (waitMs <= 0) break;
+    await sleep(waitMs + randomBetween(0, 5_000));
+  }
+  setAgentState(LAST_LINKEDIN_CALL_KEY, new Date().toISOString());
+}
 import { getEnv } from "../config/env.js";
 import { notifyDiscord } from "../notifications/discord.js";
 import { hasEmDash } from "../ai/humanize.js";
@@ -66,6 +90,7 @@ export async function executeWithRateLimit<T>(params: {
   }
 
   try {
+    await waitForActionGap();
     const result = await params.execute();
     logAction({
       actionType: params.actionType,

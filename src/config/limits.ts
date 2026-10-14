@@ -55,6 +55,10 @@ export const LIMITS = {
     refillIntervalMinutes: 15,
     /** Invite attempts before a candidate is given up on. */
     maxInviteAttempts: 2,
+    /** Wait after a sent invite before the next ES invite (spreads ~15/day over the workday). */
+    inviteSpacingMinutes: { min: 20, max: 50 },
+    /** Wait after a lookup that ended in a skip (already connected, etc). */
+    skipSpacingMinutes: { min: 5, max: 15 },
   },
 
   weeklyPostDays: [2, 4, 5] as const, // Tue, Thu, Fri (0=Sun)
@@ -70,6 +74,11 @@ export const LIMITS = {
     burstMaxActions: 7,
     burstPauseMinMs: 600_000,
     burstPauseMaxMs: 1_500_000,
+    /**
+     * Min gap between any two LinkedIn calls, across processes sharing the DB
+     * (main + ES containers use the same account).
+     */
+    minGapBetweenActionsMs: 40_000,
   },
 
   workingHours: {

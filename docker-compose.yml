@@ -1,26 +1,41 @@
+x-app: &app
+  build: .
+  image: linkedin-auto:latest
+  env_file: .env
+  volumes:
+    # One shared SQLite DB: quotas, backoff, halt state and the invite cap
+    # are enforced across every container acting on the LinkedIn account.
+    - linkedin-auto-data:/app/data
+  restart: unless-stopped
+  stop_grace_period: 30s
+
 services:
+  # Warm outreach, posts, replies, nurture, invite withdrawal, connection sync.
   agent:
-    build: .
+    <<: *app
     container_name: linkedin-auto-agent
-    env_file: .env
-    volumes:
-      - linkedin-auto-data:/app/data
-    restart: unless-stopped
+    environment:
+      AGENT_MODE: main
+
+  # Elasticsearch invite pipeline: search ES -> profile lookup -> invite.
+  # Sends nothing unless ES_PIPELINE_ENABLED=true in .env.
+  es-agent:
+    <<: *app
+    container_name: linkedin-auto-es-agent
+    environment:
+      AGENT_MODE: es
 
   dashboard:
-    build: .
+    <<: *app
     container_name: linkedin-auto-dashboard
     command: ["node", "dist/dashboard/server.js"]
-    env_file: .env
     environment:
       DASHBOARD_HOST: 0.0.0.0
     ports:
-      - "${DASHBOARD_PORT:-3847}:3847"
-    volumes:
-      - linkedin-auto-data:/app/data
+      # Localhost only: the dashboard has no auth and shows lead data.
+      - "127.0.0.1:${DASHBOARD_PORT:-3847}:3847"
     depends_on:
       - agent
-    restart: unless-stopped
 
 volumes:
   linkedin-auto-data:

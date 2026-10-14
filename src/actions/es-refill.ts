@@ -32,7 +32,8 @@ export interface EsRefillResult {
 }
 
 export function isEsPipelineActive(): boolean {
-  return getEnv().ES_PIPELINE_ENABLED && isEsConfigured();
+  const env = getEnv();
+  return env.AGENT_MODE !== "main" && env.ES_PIPELINE_ENABLED && isEsConfigured();
 }
 
 /** Due when enabled, not refilled recently, and a country's queue is low. */

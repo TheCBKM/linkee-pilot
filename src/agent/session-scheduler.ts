@@ -18,6 +18,7 @@ import { WITHDRAW_INVITE_IDLE_DATE_KEY } from "../actions/withdraw-invite.js";
 import { shouldSyncConnections } from "../actions/sync-connections.js";
 import { shouldRefillEsQueue } from "../actions/es-refill.js";
 import { hasEsInviteWork } from "../actions/es-invite.js";
+import { getEnv } from "../config/env.js";
 import { getLocalDateString } from "../config/local-time.js";
 
 export type ScheduledAction =
@@ -51,6 +52,10 @@ export function getNextScheduledAction(): ScheduledAction {
 
   if (window === "off_hours") {
     return { type: "idle", reason: "outside_working_hours" };
+  }
+
+  if (getEnv().AGENT_MODE === "es") {
+    return getNextEsOnlyAction();
   }
 
   if (isProfileAuditDay(new Date()) && canAct("profile_audit").allowed) {
@@ -96,6 +101,13 @@ export function getNextScheduledAction(): ScheduledAction {
 
   const picked = weightedPick(candidates, weights);
   return picked ?? { type: "idle", reason: "all_quotas_exhausted" };
+}
+
+/** ES container: refill the queue, otherwise invite when spacing allows. */
+function getNextEsOnlyAction(): ScheduledAction {
+  if (shouldRefillEsQueue()) return { type: "es_refill" };
+  if (hasEsInviteWork()) return { type: "es_invite" };
+  return { type: "idle", reason: "es_waiting" };
 }
 
 function buildEligibleCandidates(

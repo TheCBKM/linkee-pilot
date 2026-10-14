@@ -2,6 +2,12 @@ import fs from "node:fs";
 import { getPidPath } from "../config/env.js";
 import { setAgentState } from "../db/store.js";
 import { notifyDiscord } from "../notifications/discord.js";
+import { getEnv } from "../config/env.js";
+
+/** ES-only containers keep their own status/heartbeat keys. */
+export function stateKey(name: string): string {
+  return getEnv().AGENT_MODE === "es" ? `es_${name}` : name;
+}
 
 let shuttingDown = false;
 let currentActionPromise: Promise<void> | null = null;
@@ -11,7 +17,7 @@ export function setupLifecycle(onShutdown: () => Promise<void>): void {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[agent] Received ${signal}, shutting down gracefully...`);
-    setAgentState("status", "stopping");
+    setAgentState(stateKey("status"), "stopping");
 
     if (currentActionPromise) {
       await currentActionPromise.catch(() => {});
@@ -19,7 +25,7 @@ export function setupLifecycle(onShutdown: () => Promise<void>): void {
 
     await onShutdown();
     removePidFile();
-    setAgentState("status", "stopped");
+    setAgentState(stateKey("status"), "stopped");
     await notifyDiscord({
       title: "Agent · Stopped",
       description: `Graceful shutdown after ${signal}.`,
@@ -104,9 +110,9 @@ export function isProcessRunning(pid: number): boolean {
 }
 
 export function writeHeartbeat(lastAction?: string): void {
-  setAgentState("last_heartbeat", new Date().toISOString());
-  setAgentState("status", "running");
+  setAgentState(stateKey("last_heartbeat"), new Date().toISOString());
+  setAgentState(stateKey("status"), "running");
   if (lastAction) {
-    setAgentState("last_action", lastAction);
+    setAgentState(stateKey("last_action"), lastAction);
   }
 }

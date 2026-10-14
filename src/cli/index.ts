@@ -11,6 +11,7 @@ import {
   getEsStats,
 } from "../db/store.js";
 import { isEsConfigured, searchEsPeople } from "../clients/elasticsearch.js";
+import { draftNetworkingInviteNote } from "../ai/comment-writer.js";
 import { ES_COUNTRIES, ES_SEGMENTS, type EsCountry, type EsSegment } from "../config/es-icp.js";
 import {
   readPidFile,
@@ -98,6 +99,9 @@ program
     const es = getEsStats();
     if (Object.keys(es.byStatus).length > 0) {
       console.log("\n--- ES invite pipeline ---");
+      console.log(
+        `  ES agent: ${getAgentState("es_status") ?? "n/a"} (heartbeat ${getAgentState("es_last_heartbeat") ?? "never"}, last ${getAgentState("es_last_action") ?? "none"})`
+      );
       for (const [status, n] of Object.entries(es.byStatus)) {
         console.log(`  ${status}: ${n}`);
       }
@@ -152,7 +156,8 @@ program
   .option("-c, --country <country>", `One of: ${ES_COUNTRIES.join(", ")}`, "united states")
   .option("-s, --segment <segment>", `One of: ${ES_SEGMENTS.join(", ")}`, "eng_executives")
   .option("-n, --size <n>", "How many to show", "10")
-  .action(async (opts: { country: string; segment: string; size: string }) => {
+  .option("--notes", "Also draft the invite note for each person (OpenAI, not saved)")
+  .action(async (opts: { country: string; segment: string; size: string; notes?: boolean }) => {
     loadEnv({ requireApiKeys: false });
     if (!isEsConfigured()) {
       console.error("Set ES_URL, ES_USERNAME and ES_PASSWORD in .env");
@@ -176,6 +181,21 @@ program
     for (const p of people) {
       console.log(`  ${p.fullName ?? "?"} | ${p.jobTitle ?? "?"} @ ${p.company ?? "?"}`);
       console.log(`    ${p.linkedinUrl ?? p.linkedinUsername}`);
+      if (opts.notes) {
+        const note = await draftNetworkingInviteNote({
+          name: p.fullName ?? undefined,
+          title: p.jobTitle ?? undefined,
+          company: p.company ?? undefined,
+          headline: p.headline ?? undefined,
+          preview: true,
+        });
+        console.log(
+          note
+            ? `    NOTE (${note.length} chars): ${note}`
+            : "    NOTE: blocked by safety filter (invite would go without a note)"
+        );
+      }
+      console.log();
     }
     console.log();
   });

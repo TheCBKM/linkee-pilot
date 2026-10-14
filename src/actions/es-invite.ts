@@ -19,6 +19,23 @@ import {
   type EsCandidate,
 } from "../db/store.js";
 import { isEsPipelineActive } from "./es-refill.js";
+import { getAgentState, setAgentState } from "../db/store.js";
+import { randomBetween } from "../rate-limiter/human-delay.js";
+
+const ES_NEXT_INVITE_AT_KEY = "es_next_invite_at";
+
+function isSpacingElapsed(): boolean {
+  const next = getAgentState(ES_NEXT_INVITE_AT_KEY);
+  return !next || Date.now() >= new Date(next).getTime();
+}
+
+function scheduleNextInvite(range: { min: number; max: number }): void {
+  const minutes = randomBetween(range.min, range.max);
+  setAgentState(
+    ES_NEXT_INVITE_AT_KEY,
+    new Date(Date.now() + minutes * 60_000).toISOString()
+  );
+}
 
 const SKIP_INVITE_ERRORS = new Set([
   "errors/already_invited_recently",
@@ -36,6 +53,7 @@ export interface EsInviteResult {
 /** True when the scheduler can offer an es_invite action. */
 export function hasEsInviteWork(): boolean {
   if (!isEsPipelineActive() || !canAct("es_invite").allowed) return false;
+  if (!isSpacingElapsed()) return false;
   return countEsQueue(undefined, !canLookup()) > 0;
 }
 
@@ -53,6 +71,17 @@ function pickCountry(resolvedOnly: boolean): string | null {
 }
 
 export async function sendEsInvite(): Promise<EsInviteResult> {
+  const result = await attemptEsInvite();
+  if (result.sent) {
+    scheduleNextInvite(LIMITS.es.inviteSpacingMinutes);
+  } else if (result.candidate && result.reason !== "dry_run") {
+    // A lookup or invite call was made (or failed); short pause before the next one.
+    scheduleNextInvite(LIMITS.es.skipSpacingMinutes);
+  }
+  return result;
+}
+
+async function attemptEsInvite(): Promise<EsInviteResult> {
   const resolvedOnly = !canLookup();
   const country = pickCountry(resolvedOnly);
   if (!country) return { sent: false, reason: "queue_empty" };
