@@ -18,6 +18,7 @@ import {
   CONNECTIONS_SYNC_COUNT_DATE_KEY,
   CONNECTIONS_SYNC_COUNT_KEY,
 } from "../actions/sync-connections.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 let db: Database.Database | null = null;
 
@@ -59,7 +60,7 @@ function getQuotaCount(actionType: ActionType, date: string): number {
 
 function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
   const accountAge = getAccountAgeDaysReadOnly();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   const actionTypes: ActionType[] = [
     "like_post",
     "like_comment",
@@ -71,6 +72,8 @@ function getQuotaRemaining(): Record<string, { used: number; cap: number }> {
     "search",
     "profile_audit",
     "view_profile",
+    "es_lookup",
+    "es_invite",
   ];
 
   return Object.fromEntries(
@@ -503,11 +506,11 @@ export function getDashboardOverview(): DashboardOverview {
       .get() as { c: number }
   ).c;
 
-  const todayUtc = new Date().toISOString().slice(0, 10);
+  const todayLocal = getLocalDateString();
   const syncCountDate = getAgentState(CONNECTIONS_SYNC_COUNT_DATE_KEY);
   const syncCountRaw = getAgentState(CONNECTIONS_SYNC_COUNT_KEY);
   const syncsToday =
-    syncCountDate === todayUtc && syncCountRaw
+    syncCountDate === todayLocal && syncCountRaw
       ? Number.parseInt(syncCountRaw, 10) || 0
       : 0;
 

@@ -27,7 +27,12 @@ export async function executeWithRateLimit<T>(params: {
   targetId: string;
   content?: string;
   execute: () => Promise<T>;
-}): Promise<{ success: boolean; result?: T; skipped?: boolean }> {
+}): Promise<{
+  success: boolean;
+  result?: T;
+  skipped?: boolean;
+  errorType?: string;
+}> {
   const check = canAct(params.actionType);
   if (!check.allowed) {
     return { success: false, skipped: true };
@@ -115,14 +120,14 @@ export async function executeWithRateLimit<T>(params: {
     }
 
     if (backoff.skipTarget) {
-      return { success: false, skipped: true };
+      return { success: false, skipped: true, errorType };
     }
 
     if (backoff.sleepMs > 0) {
       await sleep(backoff.sleepMs);
     }
 
-    return { success: false, skipped: true };
+    return { success: false, skipped: true, errorType };
   }
 }
 

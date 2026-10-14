@@ -1,7 +1,8 @@
-import type { ActionType } from "../config/limits.js";
+import { backoffKeysFor, type ActionType } from "../config/limits.js";
 import { setBackoff, setGlobalHalt } from "../db/store.js";
 import { parseErrorType, UnipileError } from "../clients/unipile.js";
 import { notifyDiscord } from "../notifications/discord.js";
+import { msUntilLocalMidnight } from "../config/local-time.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const THIRTY_MIN_MS = 30 * 60 * 1000;
@@ -62,7 +63,9 @@ export function handleApiError(
   }
 
   if (err instanceof UnipileError && err.status === 429) {
-    setBackoff(actionType, new Date(Date.now() + THIRTY_MIN_MS), "429 too_many_requests");
+    for (const key of backoffKeysFor(actionType)) {
+      setBackoff(key, new Date(Date.now() + THIRTY_MIN_MS), "429 too_many_requests");
+    }
     notifyDiscord({
       title: "Rate limit · 429",
       description: `Backing off ${actionType} for 30 minutes.`,
@@ -82,9 +85,10 @@ export function handleApiError(
   }
 
   if (errorType && DAY_BLOCK_ERRORS.has(errorType)) {
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
-    setBackoff(actionType, endOfDay, errorType);
+    const endOfDay = new Date(Date.now() + msUntilLocalMidnight());
+    for (const key of backoffKeysFor(actionType)) {
+      setBackoff(key, endOfDay, errorType);
+    }
     notifyDiscord({
       title: "Rate limit · Day block",
       description: `Action ${actionType} blocked until end of day.`,

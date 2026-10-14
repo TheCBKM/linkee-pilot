@@ -16,6 +16,9 @@ import type { Target } from "../db/store.js";
 import { POST_BOOST_UNTIL_KEY } from "../actions/create-post.js";
 import { WITHDRAW_INVITE_IDLE_DATE_KEY } from "../actions/withdraw-invite.js";
 import { shouldSyncConnections } from "../actions/sync-connections.js";
+import { shouldRefillEsQueue } from "../actions/es-refill.js";
+import { hasEsInviteWork } from "../actions/es-invite.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export type ScheduledAction =
   | { type: "research" }
@@ -24,6 +27,8 @@ export type ScheduledAction =
   | { type: "comment_post"; target: Target }
   | { type: "reply_comment" }
   | { type: "send_invite"; target: Target }
+  | { type: "es_refill" }
+  | { type: "es_invite" }
   | { type: "withdraw_invite" }
   | { type: "sync_connections" }
   | { type: "view_profile"; target: Target }
@@ -56,7 +61,7 @@ export function getNextScheduledAction(): ScheduledAction {
     return { type: "create_post" };
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   if (
     canAct("withdraw_invite").allowed &&
     getAgentState(WITHDRAW_INVITE_IDLE_DATE_KEY) !== today
@@ -68,6 +73,11 @@ export function getNextScheduledAction(): ScheduledAction {
   // Does not consume like/comment/invite quotas.
   if (shouldSyncConnections()) {
     return { type: "sync_connections" };
+  }
+
+  // Elasticsearch candidate refill: no LinkedIn calls, no quota.
+  if (shouldRefillEsQueue()) {
+    return { type: "es_refill" };
   }
 
   const boostActive = isPostBoostActive();
@@ -110,6 +120,13 @@ function buildEligibleCandidates(
     if (actionType === "reply_comment") {
       if (!hasRecentOwnPosts(LIMITS.ownPostReplyWindowHours)) continue;
       candidates.push({ type: "reply_comment" });
+      weights.push(weight);
+      continue;
+    }
+
+    if (actionType === "es_invite") {
+      if (!hasEsInviteWork()) continue;
+      candidates.push({ type: "es_invite" });
       weights.push(weight);
       continue;
     }
@@ -186,6 +203,7 @@ function getWeightsForWindow(
         { actionType: "search", weight: 3 },
         { actionType: "like_post", weight: 2 },
         { actionType: "comment_post", weight: 2 },
+        { actionType: "es_invite", weight: 2 },
       ];
     case "midday":
       return [
@@ -193,6 +211,7 @@ function getWeightsForWindow(
         { actionType: "comment_post", weight: 3 },
         { actionType: "like_comment", weight: 2 },
         { actionType: "like_post", weight: 2 },
+        { actionType: "es_invite", weight: 2 },
       ];
     case "afternoon":
       return [
@@ -201,6 +220,7 @@ function getWeightsForWindow(
         { actionType: "like_post", weight: 2 },
         { actionType: "search", weight: 2 },
         { actionType: "reply_comment", weight: 2 },
+        { actionType: "es_invite", weight: 3 },
       ];
     case "late_afternoon":
       return [
@@ -209,6 +229,7 @@ function getWeightsForWindow(
         { actionType: "comment_post", weight: 2 },
         { actionType: "view_profile", weight: 2 },
         { actionType: "like_comment", weight: 2 },
+        { actionType: "es_invite", weight: 2 },
       ];
     default:
       return [{ actionType: "search", weight: 1 }];

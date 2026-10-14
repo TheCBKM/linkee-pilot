@@ -19,6 +19,7 @@ import { canAct, recordAction } from "../rate-limiter/quota.js";
 import { getDailyCap } from "../config/limits.js";
 import { passesIcpFilter, passesEngagementGate } from "./icp-filter.js";
 import { scoreTarget } from "./target-scorer.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export interface DiscoveredTarget {
   target_type: "post" | "person";
@@ -121,7 +122,7 @@ function pickStrategy(): SearchStrategy {
 }
 
 function todayDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDateString();
 }
 
 function extractLocation(item: Record<string, unknown>): string | undefined {

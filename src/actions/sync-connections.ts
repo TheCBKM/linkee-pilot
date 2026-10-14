@@ -6,6 +6,7 @@ import {
   setAgentState,
   upsertConnection,
 } from "../db/store.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 export const CONNECTIONS_BACKFILL_DONE_KEY = "connections_backfill_done";
 export const CONNECTIONS_NEXT_SYNC_AT_KEY = "connections_next_sync_at";
@@ -23,7 +24,7 @@ export type SyncConnectionsResult = {
 };
 
 function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDateString();
 }
 
 function randomSyncDelayMs(): number {

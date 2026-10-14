@@ -21,11 +21,14 @@ import { replyToOwnPostComment } from "../actions/reply-comment.js";
 import { sendConnectionRequest } from "../actions/send-invite.js";
 import { withdrawStaleInvite } from "../actions/withdraw-invite.js";
 import { syncConnections } from "../actions/sync-connections.js";
+import { refillEsQueue } from "../actions/es-refill.js";
+import { sendEsInvite } from "../actions/es-invite.js";
 import { viewProfile } from "../actions/view-profile.js";
 import { publishPost } from "../actions/create-post.js";
 import { fetchAndRecordProfile } from "../actions/fetch-profile.js";
 import { gatherPostTrends } from "../ai/post-trends.js";
 import { notifyDiscord } from "../notifications/discord.js";
+import { getLocalDateString } from "../config/local-time.js";
 
 const IDLE_SLEEP_MS = 60_000;
 const MIN_SLEEP_MS = 5_000;
@@ -194,7 +197,35 @@ async function executeAction(
       writeHeartbeat("sync_connections");
       break;
     }
-    case "view_profile": {
+    case "es_refill": {
+      console.log("[agent] Refilling ES candidate queue...");
+      try {
+        const r = await refillEsQueue();
+        console.log(
+          `[agent] ES refill (${r.country}, ${r.segment}): fetched ${r.fetched}, filtered ${r.filtered}, +${r.inserted} new`
+        );
+      } catch (err) {
+        console.error("[agent] ES refill failed:", err);
+        notifyDiscord({
+          title: "ES pipeline · Refill failed",
+          description: String(err).slice(0, 300),
+          severity: "warn",
+        });
+      }
+      writeHeartbeat("es_refill");
+      break;
+    }
+    case "es_invite": {
+      const r = await sendEsInvite();
+      console.log(
+        r.sent
+          ? `[agent] ES invite sent to ${r.candidate} (${r.country})`
+          : `[agent] ES invite skipped${r.candidate ? ` for ${r.candidate}` : ""}: ${r.reason}`
+      );
+      writeHeartbeat("es_invite");
+      break;
+    }
+        case "view_profile": {
       console.log(`[agent] Viewing profile of ${action.target.author_name ?? "unknown"}`);
       await viewProfile(action.target);
       writeHeartbeat("view_profile");
@@ -237,7 +268,7 @@ async function executeAction(
 }
 
 function notifyQuotasExhaustedOnce(): void {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateString();
   if (getAgentState(QUOTAS_EXHAUSTED_NOTIFIED_KEY) === today) return;
   setAgentState(QUOTAS_EXHAUSTED_NOTIFIED_KEY, today);
   notifyDiscord({
